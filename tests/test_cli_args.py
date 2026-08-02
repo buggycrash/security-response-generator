@@ -11,14 +11,28 @@ from security_response_generator.generation.retrieval import RetrievalResult, Re
 from security_response_generator.ingest.chunking import Chunk
 
 runner = CliRunner()
+VALIDATION = "Screenshot of the relevant system screen showing the stated configuration."
 
 
-def _final_reply(text: str) -> str:
-    return json.dumps({"needs_info": False, "question": None, "response": text})
+def _final_reply(text: str, validations: list[str] | None = None) -> str:
+    return json.dumps(
+        {
+            "needs_info": False,
+            "question": None,
+            "response": text,
+            "validations": validations if validations is not None else [VALIDATION],
+        }
+    )
 
 
 def _followup_reply(question: str) -> str:
-    return json.dumps({"needs_info": True, "question": question, "response": None})
+    return json.dumps(
+        {"needs_info": True, "question": question, "response": None, "validations": None}
+    )
+
+
+def _rendered_reply(text: str, validation: str = VALIDATION) -> str:
+    return f"{text}\n\n[Validations]\n\n* {validation}"
 
 
 def _baseline_chunk(chunk_id: str = "doc.md::0") -> RetrievedChunk:
@@ -141,7 +155,10 @@ def test_generate_prints_response_and_writes_output_file(monkeypatch, tmp_path):
 
     assert result.exit_code == 0
     assert "Generated response" in result.stdout
-    assert output_file.read_text() == "# Customer: DEMO\n\n# SI-5\nGenerated response"
+    assert output_file.read_text() == (
+        "# Customer: DEMO\n\n# SI-5\nGenerated response\n\n[Validations]\n\n"
+        "* [PLACEHOLDER: no screenshot validations were generated.]"
+    )
 
 
 def test_generate_without_output_flag_does_not_require_file(monkeypatch):
@@ -264,8 +281,29 @@ def test_run_conversation_returns_immediately_when_no_followup_needed(monkeypatc
 
     result = cli._run_conversation(_prompt())
 
-    assert result == "# SI-5\n\nFinal response."
+    assert result == _rendered_reply("# SI-5\n\nFinal response.")
     assert len(calls) == 1
+
+
+def test_render_final_reply_uses_unbulleted_validations_for_text_output():
+    raw = _final_reply("AC-2\n\nImplementation prose.")
+
+    result = cli._render_final_reply(raw, cli.OutputFormat.text)
+
+    assert result == f"AC-2\n\nImplementation prose.\n\n[Validations]\n\n{VALIDATION}"
+
+
+def test_render_final_reply_replaces_model_inlined_validations_with_structured_list():
+    raw = _final_reply(
+        "# AC-2\n\nImplementation prose.\n\n[Validations]\n\n* Duplicate suggestion.",
+        validations=["Screenshot of the account settings showing shared accounts disabled."],
+    )
+
+    result = cli._render_final_reply(raw, cli.OutputFormat.markdown)
+
+    assert result.count("[Validations]") == 1
+    assert "Duplicate suggestion" not in result
+    assert result.endswith("* Screenshot of the account settings showing shared accounts disabled.")
 
 
 def test_run_conversation_asks_once_then_returns_final_answer(monkeypatch, tmp_path):
@@ -287,7 +325,7 @@ def test_run_conversation_asks_once_then_returns_final_answer(monkeypatch, tmp_p
 
     result = cli._run_conversation(_prompt())
 
-    assert result == "# SI-5\n\nFinal response using Acme Sentinel."
+    assert result == _rendered_reply("# SI-5\n\nFinal response using Acme Sentinel.")
     assert len(calls) == 2
     # second call's message history includes the question and the analyst's answer
     assert calls[1][-2] == {"role": "assistant", "content": first_reply}
@@ -321,7 +359,9 @@ def test_run_conversation_forces_completion_when_budget_exhausted(monkeypatch):
 
     result = cli._run_conversation(_prompt())
 
-    assert result == "# SI-5\n\nBest-effort response. [PLACEHOLDER: need details on X]"
+    assert result == _rendered_reply(
+        "# SI-5\n\nBest-effort response. [PLACEHOLDER: need details on X]"
+    )
     # 2 answered questions + 1 that trips the budget + 1 forced-completion call
     assert chat_call_count["value"] == 4
     # only the 2 budgeted questions were asked interactively
@@ -346,7 +386,7 @@ def test_run_conversation_forced_completion_message_included_in_final_call(monke
 
     result = cli._run_conversation(_prompt())
 
-    assert result == "# SI-5\n\nBest-effort response with placeholder."
+    assert result == _rendered_reply("# SI-5\n\nBest-effort response with placeholder.")
     assert len(calls) == 2
     assert calls[1][-1] == {"role": "user", "content": FORCED_COMPLETION_INSTRUCTION}
 
@@ -454,7 +494,7 @@ def test_create_engagement_command_reports_document_paths(monkeypatch, tmp_path)
     assert str(engagement.private_context_dir) in result.output
 
 
-def test_demo_reminder_explains_engagement_naming(capsys):
+def test_demo_reminder_links_to_engagement_documentation(capsys):
     demo = cli.engagements.Engagement(
         "demo",
         "DEMO",
@@ -463,10 +503,10 @@ def test_demo_reminder_explains_engagement_naming(capsys):
     cli._show_demo_reminder(demo)
 
     output = capsys.readouterr().err
-    assert "srg create-engagement <governing-state>-<system-name>" in output
-    assert "srg create-engagement northbridge-SALI" in output
-    assert "srg list-engagements" in output
-    assert "srg use-engagement <engagement-name>" in output
+    assert output == (
+        "\nUsing DEMO engagement. To create your first engagement, see README.md "
+        "#create-a-customer-engagement.\n"
+    )
 
 
 def test_upsert_with_progress_calls_upsert_chunks_with_working_callback(monkeypatch):

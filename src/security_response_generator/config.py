@@ -7,6 +7,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 GENERATION_MODEL = os.environ.get("SRG_GEN_MODEL", "llama3.1:8b")
 EMBEDDING_MODEL = os.environ.get("SRG_EMBED_MODEL", "embeddinggemma")
+GENERATION_KEEP_ALIVE = os.environ.get("SRG_GEN_KEEP_ALIVE", "20m")
 
 # A large source document (e.g. the full NIST 800-53 catalog) can
 # chunk into hundreds of pieces. Sending them all to Ollama in a single

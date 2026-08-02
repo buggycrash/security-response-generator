@@ -7,6 +7,7 @@ import ollama
 from security_response_generator.config import (
     EMBED_BATCH_SIZE,
     EMBEDDING_MODEL,
+    GENERATION_KEEP_ALIVE,
     GENERATION_MODEL,
     NUM_CTX,
 )
@@ -62,5 +63,6 @@ def chat_messages(messages: list[dict], response_format: dict | None = None) -> 
         messages=messages,
         options={"num_ctx": NUM_CTX},
         format=response_format,
+        keep_alive=GENERATION_KEEP_ALIVE,
     )
     return response["message"]["content"]

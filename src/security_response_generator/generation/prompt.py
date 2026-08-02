@@ -9,6 +9,7 @@ from security_response_generator.generation.retrieval import RetrievedChunk
 CUSTOMER_LABEL = "--- Customer/State Standard (Authoritative) ---"
 BASELINE_LABEL = "--- NIST 800-53 Baseline ---"
 PRIVATE_LABEL = "--- System-Specific Context ---"
+ANALYST_FACTS_LABEL = "--- Analyst-Provided Facts (Must Use) ---"
 
 
 class OutputFormat(enum.StrEnum):
@@ -17,23 +18,16 @@ class OutputFormat(enum.StrEnum):
 
 
 MARKDOWN_FORMAT_INSTRUCTION = (
-    'When you do write a "response", its content must be valid Markdown, but kept '
-    "minimal: a single '# <Control ID>' heading followed by plain narrative "
-    "paragraphs, and nothing else. Do not use tables, bullet or numbered lists, "
-    "multiple subheadings, bold status labels, or a separate summary/conclusion "
-    "section -- this text goes directly into a GRC tool's response field as the "
-    "control implementation narrative, not a formatted audit report. Do not include "
-    "commentary outside the response itself."
+    'When you do write a "response", render its content as valid Markdown. Preserve '
+    "the content and structure requested by the system instructions; this formatting "
+    "instruction does not add or remove sections."
 )
 
 TEXT_FORMAT_INSTRUCTION = (
-    'When you do write a "response", its content must be plain ASCII text. Do not '
-    "use any Markdown syntax (no #, *, _, backticks, tables, or bullet symbols), "
-    "smart quotes, em-dashes, or any non-ASCII characters. Use a plain capitalized "
-    "line with the control ID as a heading, followed by plain narrative paragraphs, "
-    "and nothing else -- no tables (including ASCII-art tables built from "
-    "dashes/pipes), no bullet or numbered lists, no separate summary/conclusion "
-    "section. Do not include commentary outside the response itself."
+    'When you do write a "response", render its content as plain ASCII text. Do not '
+    "use Markdown syntax, smart quotes, em-dashes, or other non-ASCII characters. "
+    "Preserve the content and structure requested by the system instructions, using "
+    "plain ASCII equivalents such as bracketed section labels and unbulleted lines."
 )
 
 _FORMAT_INSTRUCTIONS = {
@@ -46,20 +40,45 @@ RESPONSE_SCHEMA = {
     "properties": {
         "needs_info": {"type": "boolean"},
         "question": {"type": ["string", "null"]},
-        "response": {"type": ["string", "null"]},
+        "response": {
+            "type": ["string", "null"],
+            "description": (
+                "One control heading followed by 2-4 cohesive implementation paragraphs; "
+                "synthesize requirements without clause-by-clause sections, signposts, "
+                "or applicability judgments labeled with clause letters or numbers."
+            ),
+        },
+        "validations": {
+            "type": ["array", "null"],
+            "items": {"type": "string"},
+            "description": "Concrete screenshot artifacts tied to claims in the response.",
+        },
     },
-    "required": ["needs_info", "question", "response"],
+    "required": ["needs_info", "question", "response", "validations"],
+    "additionalProperties": False,
 }
 
 FOLLOWUP_INSTRUCTION = (
-    'Your reply must be a JSON object with exactly three fields: "needs_info" '
-    '(boolean), "question" (string or null), and "response" (string or null). '
+    'Your reply must be a JSON object with exactly four fields: "needs_info" '
+    '(boolean), "question" (string or null), "response" (string or null), and '
+    '"validations" (an array of strings or null). '
     "If completing this response requires information not covered by the material "
     "above or the analyst's notes -- and the gap concerns a distinct, material part "
     'of the control rather than a minor stylistic detail -- set "needs_info" to '
-    'true, put one focused question in "question", and leave "response" null. '
+    'true, put one focused question in "question", and leave "response" and '
+    '"validations" null. '
     'Otherwise set "needs_info" to false, leave "question" null, and put the '
-    'full response in "response" following the rules above.'
+    'control heading and implementation prose only in "response". Put each requested '
+    'screenshot evidence suggestion in "validations" as a separate string; do not '
+    'include the [Validations] heading or validation suggestions inside "response". '
+    "Before setting needs_info to false, verify that every relevant fact in the "
+    "Analyst-Provided Facts section is explicitly stated or directly addressed in "
+    "the response. If an analyst fact means the condition for one control clause is "
+    "absent, state the operational effect without labeling clauses as applicable or "
+    "not applicable. Requirements that define, prohibit, or govern account and role "
+    "types still apply even when one account type is not deployed. Do not characterize "
+    "the entire control as not applicable. Follow all content and structure rules from "
+    "the system instructions."
 )
 
 FORCED_COMPLETION_INSTRUCTION = (
@@ -71,7 +90,8 @@ FORCED_COMPLETION_INSTRUCTION = (
     '"[PLACEHOLDER: need details on ...]") instead of guessing or inventing details. '
     "Open the response with a brief, polite note that some information was not "
     "available and that placeholder(s) were left for the analyst to fill in before "
-    "this response is submitted to the assessor."
+    "this response is submitted to the assessor. Also provide the requested screenshot "
+    'suggestions in the "validations" array.'
 )
 
 
@@ -80,6 +100,7 @@ class ModelReply:
     needs_info: bool
     question: str | None
     response: str | None
+    validations: list[str] | None
 
 
 def parse_model_reply(raw: str) -> ModelReply:
@@ -92,13 +113,20 @@ def parse_model_reply(raw: str) -> ModelReply:
     """
     try:
         data = json.loads(raw)
+        validations = data["validations"]
+        if validations is not None and not (
+            isinstance(validations, list)
+            and all(isinstance(validation, str) for validation in validations)
+        ):
+            raise TypeError
         return ModelReply(
             needs_info=bool(data["needs_info"]),
             question=data.get("question"),
             response=data.get("response"),
+            validations=validations,
         )
     except (json.JSONDecodeError, KeyError, TypeError):
-        return ModelReply(needs_info=False, question=None, response=raw)
+        return ModelReply(needs_info=False, question=None, response=raw, validations=None)
 
 
 @dataclass
@@ -116,7 +144,18 @@ def assemble_prompt(
     private_chunks: list[RetrievedChunk],
     output_format: OutputFormat = OutputFormat.markdown,
 ) -> AssembledPrompt:
+    system_sections = [instructions]
     sections: list[str] = []
+
+    if context_notes:
+        system_sections.extend(
+            (
+                ANALYST_FACTS_LABEL,
+                context_notes,
+                "These analyst-provided facts are authoritative for this response and "
+                "must be explicitly reflected in the implementation narrative.",
+            )
+        )
 
     if customer_chunks:
         sections.append(CUSTOMER_LABEL)
@@ -130,9 +169,7 @@ def assemble_prompt(
         sections.extend(chunk.text for chunk in private_chunks)
 
     sections.append(f"Control ID: {control_id}")
-    if context_notes:
-        sections.append(f"Analyst notes: {context_notes}")
     sections.append(FOLLOWUP_INSTRUCTION)
     sections.append(_FORMAT_INSTRUCTIONS[output_format])
 
-    return AssembledPrompt(system=instructions, user="\n\n".join(sections))
+    return AssembledPrompt(system="\n\n".join(system_sections), user="\n\n".join(sections))
