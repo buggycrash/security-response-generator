@@ -109,8 +109,10 @@ Chroma product telemetry.
    ./setup.sh --check
    ```
 
-   Other setup options include `--dev`, `--skip-models`, `--model MODEL`,
-   and `--install-dir DIR`; run `./setup.sh --help` for details.
+   Other setup options include `--dev`, `--dev-only`, `--skip-models`,
+   `--model MODEL`, and `--install-dir DIR`; run `./setup.sh --help` for
+   details. `--dev-only` prepares the test environment and Git hook without
+   touching the command launcher, Ollama, or models.
 
 ## Choosing a generation model
 
@@ -353,10 +355,15 @@ select it.
 ## Development
 
 ```bash
-pytest              # run tests
-ruff check .         # lint
-ruff format .        # format
+./setup.sh --dev-only            # install dev dependencies and enable Git hooks
+.venv/bin/pytest               # run tests
+.venv/bin/ruff check .          # lint
+.venv/bin/ruff format --check . # verify formatting
 ```
+
+See [CONTRIBUTING.md](../CONTRIBUTING.md) for the complete contribution
+workflow. GitHub Actions runs the same lint, formatting, and test checks on
+pull requests and pushes to `main`.
 
 Most of the pipeline (chunking, manifest diffing, prompt assembly, retrieval
 merge logic, CLI argument parsing) is unit-tested without needing a live

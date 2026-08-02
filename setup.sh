@@ -9,6 +9,7 @@ INSTALL_DIR="${SRG_INSTALL_DIR:-$HOME/.local/bin}"
 GEN_MODEL="${SRG_GEN_MODEL:-$SRG_DEFAULT_GEN_MODEL}"
 EMBED_MODEL="${SRG_EMBED_MODEL:-$SRG_DEFAULT_EMBED_MODEL}"
 INSTALL_DEV=0
+DEV_ONLY=0
 SKIP_MODELS=0
 CHECK_ONLY=0
 
@@ -21,6 +22,7 @@ Install Security Response Generator and make the 'srg' command available.
 Options:
   --check              Check installation health without changing anything
   --dev                Install development and test dependencies
+  --dev-only           Set up tests and Git hooks; skip launcher and Ollama
   --skip-models        Do not download Ollama models
   --model MODEL        Use and download a different generation model
   --install-dir DIR    Install the srg launcher here (default: ~/.local/bin)
@@ -37,6 +39,10 @@ while [ "$#" -gt 0 ]; do
   case "$1" in
     --check) CHECK_ONLY=1 ;;
     --dev) INSTALL_DEV=1 ;;
+    --dev-only)
+      INSTALL_DEV=1
+      DEV_ONLY=1
+      ;;
     --skip-models) SKIP_MODELS=1 ;;
     --model)
       [ "$#" -ge 2 ] || { srg_error "--model requires a value"; exit 2; }
@@ -61,7 +67,8 @@ while [ "$#" -gt 0 ]; do
   shift
 done
 
-if srg_model_is_cloud "$GEN_MODEL" || srg_model_is_cloud "$EMBED_MODEL"; then
+if [ "$DEV_ONLY" -eq 0 ] &&
+  { srg_model_is_cloud "$GEN_MODEL" || srg_model_is_cloud "$EMBED_MODEL"; }; then
   srg_error "Cloud-tagged Ollama models are not supported. Configure local models only."
   exit 2
 fi
@@ -145,7 +152,12 @@ fi
 
 printf 'Setting up Security Response Generator\n\n'
 
-printf '[1/6] Checking Python...\n'
+TOTAL_STEPS=6
+if [ "$DEV_ONLY" -eq 1 ]; then
+  TOTAL_STEPS=4
+fi
+
+printf '[1/%s] Checking Python...\n' "$TOTAL_STEPS"
 PYTHON_BIN=""
 if command -v python3 >/dev/null 2>&1 && srg_python_version_ok "$(command -v python3)"; then
   PYTHON_BIN="$(command -v python3)"
@@ -162,7 +174,7 @@ if [ -z "$PYTHON_BIN" ]; then
 fi
 printf '      %s\n' "$("$PYTHON_BIN" --version 2>&1)"
 
-printf '[2/6] Preparing the virtual environment...\n'
+printf '[2/%s] Preparing the virtual environment...\n' "$TOTAL_STEPS"
 if [ -e "$PROJECT_ROOT/.venv" ] &&
   { [ ! -x "$PROJECT_ROOT/.venv/bin/python" ] ||
     ! srg_python_version_ok "$PROJECT_ROOT/.venv/bin/python"; }; then
@@ -177,12 +189,31 @@ else
   printf '      Existing .venv is healthy\n'
 fi
 
-printf '[3/6] Installing SRG...\n'
+printf '[3/%s] Installing SRG...\n' "$TOTAL_STEPS"
 INSTALL_TARGET="-e"
 if [ "$INSTALL_DEV" -eq 1 ]; then
   "$PROJECT_ROOT/.venv/bin/python" -m pip install "$INSTALL_TARGET" "${PROJECT_ROOT}[dev]"
 else
   "$PROJECT_ROOT/.venv/bin/python" -m pip install "$INSTALL_TARGET" "$PROJECT_ROOT"
+fi
+
+if [ "$DEV_ONLY" -eq 1 ]; then
+  printf '[4/4] Enabling developer checks...\n'
+  if ! git -C "$PROJECT_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    srg_error "Developer setup requires a Git checkout."
+    exit 1
+  fi
+  git -C "$PROJECT_ROOT" config core.hooksPath .git-hooks
+  "$PROJECT_ROOT/.venv/bin/python" -c 'import pytest, ruff'
+  printf '      Pre-commit hook enabled\n'
+  cat <<'EOF'
+
+Developer setup complete.
+
+The project launcher, Ollama daemon, and installed models were not changed.
+Run .git-hooks/pre-commit to execute the checks now.
+EOF
+  exit 0
 fi
 
 printf '[4/6] Installing the command launcher...\n'

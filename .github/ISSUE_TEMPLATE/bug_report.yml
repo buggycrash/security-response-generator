@@ -1,0 +1,60 @@
+name: Bug report
+description: Report reproducible incorrect behavior in SRG
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        SRG is a part-time personal project. Reports are reviewed only as time
+        permits and may be closed without investigation or response. Do not
+        include customer documents, private system context, generated
+        responses, credentials, or other sensitive engagement data.
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Describe the observed behavior and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      description: Use fictional or sanitized inputs only.
+      placeholder: |
+        1. Run ...
+        2. Select ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: v0.1.0 or commit SHA
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Include OS, Python version, and Ollama version when relevant.
+      placeholder: Ubuntu 22.04, Python 3.12, Ollama 0.x
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized logs
+      description: Remove all customer, system, user, path, and credential data first.
+      render: shell
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Data-safety check
+      options:
+        - label: I removed customer and other sensitive data from this report.
+          required: true
+        - label: This is not a privately reportable security vulnerability.
+          required: true

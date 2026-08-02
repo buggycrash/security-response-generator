@@ -1,0 +1,20 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PROJECT_ROOT="$(git rev-parse --show-toplevel)"
+cd "$PROJECT_ROOT"
+
+if [ -x "$PROJECT_ROOT/.venv/bin/python" ]; then
+  PYTHON="$PROJECT_ROOT/.venv/bin/python"
+else
+  PYTHON="${PYTHON:-python3}"
+fi
+
+if ! "$PYTHON" -c "import pytest, ruff" >/dev/null 2>&1; then
+  printf 'Development dependencies are missing. Run ./setup.sh --dev-only.\n' >&2
+  exit 1
+fi
+
+"$PYTHON" -m ruff check .
+"$PYTHON" -m ruff format --check .
+"$PYTHON" -m pytest -q
