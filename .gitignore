@@ -1,0 +1,39 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+.python-version
+
+# Chroma persistence + ingestion manifest (local, regenerable via `srg ingest`)
+chroma_db/
+
+# Engagement data is local and may contain sensitive customer information.
+engagements/*
+!engagements/demo/
+engagements/demo/*
+!engagements/demo/engagement.json
+!engagements/demo/customer_standards/
+!engagements/demo/customer_standards/.gitkeep
+!engagements/demo/private_context/
+!engagements/demo/private_context/demo-system.md
+engagements/*/chroma_db/
+engagements/*/responses/
+
+# Local active-engagement selection
+.srg/
+
+# Legacy pre-engagement locations may still contain sensitive user files.
+/customer_standards/
+/private_context/
+
+# Env / secrets
+.env
+.env.local
+
+# OS cruft
+.DS_Store
+*:Zone.Identifier

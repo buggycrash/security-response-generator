@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# This file may be invoked through ~/.local/bin/srg. Resolve symlinks until
+# we reach the copy in the project so all paths remain independent of cwd.
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [ -L "$SCRIPT_PATH" ]; do
+  SCRIPT_DIR="$(cd -P "$(dirname "$SCRIPT_PATH")" >/dev/null 2>&1 && pwd)"
+  LINK_TARGET="$(readlink "$SCRIPT_PATH")"
+  case "$LINK_TARGET" in
+    /*) SCRIPT_PATH="$LINK_TARGET" ;;
+    *) SCRIPT_PATH="$SCRIPT_DIR/$LINK_TARGET" ;;
+  esac
+done
+PROJECT_ROOT="$(cd -P "$(dirname "$SCRIPT_PATH")" >/dev/null 2>&1 && pwd)"
+
+# shellcheck source=scripts/common.sh
+source "$PROJECT_ROOT/scripts/common.sh"
+
+if [ ! -x "$PROJECT_ROOT/.venv/bin/srg" ]; then
+  srg_error "SRG is not installed in $PROJECT_ROOT/.venv."
+  srg_error "Run: $PROJECT_ROOT/setup.sh"
+  exit 1
+fi
+
+# Help is entirely local. Avoid probing or starting Ollama before Typer can
+# render it, including for subcommand help such as `srg generate --help`.
+SHOWING_HELP=false
+NEEDS_OLLAMA=true
+for arg in "$@"; do
+  case "$arg" in
+    -h|--help) SHOWING_HELP=true ;;
+  esac
+done
+if [ "${1:-}" = "update-nist" ]; then
+  NEEDS_OLLAMA=false
+fi
+
+if [ "$SHOWING_HELP" = false ] && [ "$NEEDS_OLLAMA" = true ]; then
+  if ! command -v ollama >/dev/null 2>&1; then
+    srg_error "Ollama is not installed. Install it from https://ollama.com/download"
+    srg_error "Then rerun: $PROJECT_ROOT/setup.sh"
+    exit 1
+  fi
+
+  srg_start_ollama
+fi
+exec "$PROJECT_ROOT/.venv/bin/srg" "$@"
