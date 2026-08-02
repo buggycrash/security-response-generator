@@ -34,7 +34,7 @@ In this case, even the default model clearly understood and incorporated the `--
 
 ![](images/image4.png)
 
-The response in this case is not significantly better than the default model, since both properly incporporated the `--context` information.
+The response in this case is not significantly better than the default model, since both properly incorporated the `--context` information.
 
 ## Phi4-mini is weak and inconsistent
 
@@ -50,8 +50,8 @@ Running the *exact same prompt* a second time
 
 ![](images/image6.png)
 
-This did produce a response, somewhat aligned but with poor validation statements and totally missing the `--context` information.
+This time it did produce a response that is somewhat aligned and did include the `--context` information, but with poorer prose overall and a misaligned validation statement.  
 
 ## Conclusion
 
-Larger models are more reliable, but the default model will still produce a viable draft that significantly improves the speed of response generation compared to a fully manual process.  Smaller models like Phi4-mini are inappropriate.
+Larger models are generally more reliable, but the default model will still produce a viable draft that significantly improves the speed of response generation compared to a fully manual process.  Smaller models like Phi4-mini are currently inappropriate due to their variablity of response quality and alignment.
