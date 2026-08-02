@@ -8,6 +8,7 @@ SETUP_SCRIPT = PROJECT_ROOT / "setup.sh"
 LAUNCHER = PROJECT_ROOT / "srg"
 COMMON_SCRIPT = PROJECT_ROOT / "scripts" / "common.sh"
 PRE_COMMIT_HOOK = PROJECT_ROOT / ".git-hooks" / "pre-commit"
+CLEANUP_SCRIPT = PROJECT_ROOT / "cleanup.sh"
 
 
 def run_bash(*args: str, cwd: Path | None = None, env: dict | None = None):
@@ -112,6 +113,7 @@ def test_shell_scripts_have_valid_bash_syntax():
         str(LAUNCHER),
         str(COMMON_SCRIPT),
         str(PRE_COMMIT_HOOK),
+        str(CLEANUP_SCRIPT),
     )
 
     assert result.returncode == 0, result.stderr
@@ -154,6 +156,28 @@ def test_model_detection_matches_exact_model_names(tmp_path):
         "srg_model_installed llama3.1:8b; "
         "srg_model_installed embeddinggemma; "
         "! srg_model_installed llama3X1:8b"
+    )
+
+    result = run_bash("-c", command, env=env)
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_model_detection_does_not_change_callers_model_variable(tmp_path):
+    fake_ollama = tmp_path / "ollama"
+    fake_ollama.write_text(
+        "#!/usr/bin/env bash\n"
+        "printf 'NAME ID SIZE MODIFIED\\n'\n"
+        "printf 'embeddinggemma:latest def 1GB now\\n'\n",
+        encoding="utf-8",
+    )
+    fake_ollama.chmod(0o755)
+    env = {**os.environ, "PATH": f"{tmp_path}:{os.environ['PATH']}"}
+    command = (
+        f"source {COMMON_SCRIPT!s}; "
+        "model=embeddinggemma; "
+        'srg_model_installed "$model"; '
+        'test "$model" = embeddinggemma'
     )
 
     result = run_bash("-c", command, env=env)
