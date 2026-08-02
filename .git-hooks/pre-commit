@@ -11,7 +11,7 @@ else
 fi
 
 if ! "$PYTHON" -c "import pytest, ruff" >/dev/null 2>&1; then
-  printf 'Development dependencies are missing. Run ./setup.sh --dev --skip-models.\n' >&2
+  printf 'Development dependencies are missing. Run ./setup.sh --dev-only.\n' >&2
   exit 1
 fi
 

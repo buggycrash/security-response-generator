@@ -24,14 +24,14 @@ Python 3.11 or newer is required. Ollama is not needed for the automated test
 suite.
 
 ```bash
-python3 -m venv .venv
-.venv/bin/python -m pip install -e ".[dev]"
-git config core.hooksPath .git-hooks
+./setup.sh --dev-only
 ```
 
-The final command enables this repository's pre-commit hook for your clone.
-If Ollama is already installed and you also want the normal `srg` launcher,
-`./setup.sh --dev --skip-models` is a convenient alternative.
+This creates the project virtual environment, installs the editable package
+and development dependencies, and enables the repository's pre-commit hook.
+It does not install or replace the `srg` launcher, start Ollama, or download
+models. Use `./setup.sh --dev` when you want a complete runtime installation
+with development dependencies as well.
 
 ## Verify a change
 

@@ -109,8 +109,10 @@ Chroma product telemetry.
    ./setup.sh --check
    ```
 
-   Other setup options include `--dev`, `--skip-models`, `--model MODEL`,
-   and `--install-dir DIR`; run `./setup.sh --help` for details.
+   Other setup options include `--dev`, `--dev-only`, `--skip-models`,
+   `--model MODEL`, and `--install-dir DIR`; run `./setup.sh --help` for
+   details. `--dev-only` prepares the test environment and Git hook without
+   touching the command launcher, Ollama, or models.
 
 ## Choosing a generation model
 
@@ -353,16 +355,10 @@ select it.
 ## Development
 
 ```bash
-./setup.sh --dev     # install the package and development dependencies
+./setup.sh --dev-only            # install dev dependencies and enable Git hooks
 .venv/bin/pytest               # run tests
 .venv/bin/ruff check .          # lint
 .venv/bin/ruff format --check . # verify formatting
-```
-
-To enable the repository's pre-commit checks for this clone, run:
-
-```bash
-git config core.hooksPath .git-hooks
 ```
 
 See [CONTRIBUTING.md](../CONTRIBUTING.md) for the complete contribution
