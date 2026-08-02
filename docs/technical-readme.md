@@ -114,6 +114,23 @@ Chroma product telemetry.
    details. `--dev-only` prepares the test environment and Git hook without
    touching the command launcher, Ollama, or models.
 
+## Cleanup
+
+Run `./cleanup.sh` to remove the launcher owned by the current checkout and
+the configured generation and embedding models. Because Ollama models are
+shared and setup does not record whether a model predated SRG, review the
+preview carefully or pass `--keep-models`. Cleanup does not uninstall Ollama,
+stop its daemon, remove the project virtual environment, or delete the shared
+NIST index.
+
+Setup never edits shell profiles. Cleanup therefore prints the exact `PATH`
+line to remove manually rather than modifying a profile it does not own.
+
+Engagement data is retained unless `--wipe-engagements` is supplied. That
+option requires both the explicit flag and a second exact typed confirmation;
+it deletes customer engagements, local active-engagement state, and generated
+demo data while preserving the committed fictional demo seed files.
+
 ## Choosing a generation model
 
 > [!WARNING]

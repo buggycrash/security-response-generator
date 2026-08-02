@@ -85,6 +85,26 @@ Check installation health at any time:
 ./setup.sh --check
 ```
 
+## Remove the external installation
+
+To remove the launcher and configured Ollama models created by setup:
+
+```bash
+./cleanup.sh
+```
+
+The script previews its actions and requires an exact typed confirmation. It
+removes only a launcher symlink owned by this checkout and warns before
+removing Ollama models, which may be shared with other projects. Use
+`--keep-models` to retain them.
+
+`setup.sh` does not edit shell profiles, so cleanup prints the exact `PATH`
+line to remove if you added it manually. Project files, the virtual
+environment, indexes, and engagement data are retained by default. To also
+permanently delete local engagement data, use
+`./cleanup.sh --wipe-engagements`; this requires a second exact typed
+confirmation and preserves the committed fictional demo seed files.
+
 ## Try the built-in demo
 
 The initial engagement is `DEMO`. It includes:

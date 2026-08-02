@@ -61,6 +61,7 @@ srg_start_ollama() {
 srg_model_installed() {
   local wanted="$1"
   local installed
+  local model
 
   installed="$(ollama list 2>/dev/null | awk 'NR > 1 {print $1}')"
   while IFS= read -r model; do
