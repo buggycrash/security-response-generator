@@ -3,9 +3,13 @@
 __pycache__/
 *.py[cod]
 *.egg-info/
+build/
+dist/
 .pytest_cache/
 .ruff_cache/
 .coverage
+coverage.xml
+htmlcov/
 .python-version
 
 # Chroma persistence + ingestion manifest (local, regenerable via `srg ingest`)

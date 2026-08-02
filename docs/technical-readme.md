@@ -353,10 +353,21 @@ select it.
 ## Development
 
 ```bash
-pytest              # run tests
-ruff check .         # lint
-ruff format .        # format
+./setup.sh --dev     # install the package and development dependencies
+.venv/bin/pytest               # run tests
+.venv/bin/ruff check .          # lint
+.venv/bin/ruff format --check . # verify formatting
 ```
+
+To enable the repository's pre-commit checks for this clone, run:
+
+```bash
+git config core.hooksPath .git-hooks
+```
+
+See [CONTRIBUTING.md](../CONTRIBUTING.md) for the complete contribution
+workflow. GitHub Actions runs the same lint, formatting, and test checks on
+pull requests and pushes to `main`.
 
 Most of the pipeline (chunking, manifest diffing, prompt assembly, retrieval
 merge logic, CLI argument parsing) is unit-tested without needing a live

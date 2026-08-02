@@ -1,5 +1,9 @@
 # Security Response Generator
 
+[![CI](https://github.com/buggycrash/security-response-generator/actions/workflows/ci.yml/badge.svg)](https://github.com/buggycrash/security-response-generator/actions/workflows/ci.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+
 Security Response Generator (`srg`) is a local CLI that drafts NIST SP
 800-53 Release 5.2.0 control responses from:
 
@@ -204,6 +208,10 @@ See [docs/technical-readme.md](docs/technical-readme.md) for:
 - Security and privacy details
 - Troubleshooting
 - Development and testing
+
+This part-time project is not currently accepting external contributions.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for details and the development
+workflow. See [SECURITY.md](SECURITY.md) before reporting a security issue.
 
 ## License
 
