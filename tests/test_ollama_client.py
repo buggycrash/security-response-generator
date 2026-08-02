@@ -125,11 +125,12 @@ def test_embed_query_returns_single_vector(monkeypatch):
 def test_chat_messages_calls_ollama_with_configured_model_and_raw_messages(monkeypatch):
     captured = {}
 
-    def fake_chat(model, messages, options, format):
+    def fake_chat(model, messages, options, format, keep_alive):
         captured["model"] = model
         captured["messages"] = messages
         captured["options"] = options
         captured["format"] = format
+        captured["keep_alive"] = keep_alive
         return {"message": {"content": "response text"}}
 
     monkeypatch.setattr(ollama_client._local_client(), "chat", fake_chat, raising=False)
@@ -147,13 +148,14 @@ def test_chat_messages_calls_ollama_with_configured_model_and_raw_messages(monke
     assert captured["messages"] == messages
     assert captured["options"] == {"num_ctx": ollama_client.NUM_CTX}
     assert captured["format"] is None
+    assert captured["keep_alive"] == "20m"
 
 
 def test_chat_messages_passes_response_format_through(monkeypatch):
     captured = {}
     schema = {"type": "object", "properties": {"needs_info": {"type": "boolean"}}}
 
-    def fake_chat(model, messages, options, format):
+    def fake_chat(model, messages, options, format, keep_alive):
         captured["format"] = format
         return {"message": {"content": "response text"}}
 
@@ -168,7 +170,7 @@ def test_chat_messages_num_ctx_respects_override(monkeypatch):
     monkeypatch.setattr(ollama_client, "NUM_CTX", 32768)
     captured = {}
 
-    def fake_chat(model, messages, options, format):
+    def fake_chat(model, messages, options, format, keep_alive):
         captured["options"] = options
         return {"message": {"content": "response text"}}
 
@@ -177,6 +179,21 @@ def test_chat_messages_num_ctx_respects_override(monkeypatch):
     ollama_client.chat_messages([{"role": "user", "content": "hi"}])
 
     assert captured["options"] == {"num_ctx": 32768}
+
+
+def test_chat_messages_keep_alive_respects_override(monkeypatch):
+    monkeypatch.setattr(ollama_client, "GENERATION_KEEP_ALIVE", "30m")
+    captured = {}
+
+    def fake_chat(model, messages, options, format, keep_alive):
+        captured["keep_alive"] = keep_alive
+        return {"message": {"content": "response text"}}
+
+    monkeypatch.setattr(ollama_client._local_client(), "chat", fake_chat, raising=False)
+
+    ollama_client.chat_messages([{"role": "user", "content": "hi"}])
+
+    assert captured["keep_alive"] == "30m"
 
 
 @pytest.mark.parametrize("model", ["gpt-oss:cloud", "gpt-oss:120b-cloud"])

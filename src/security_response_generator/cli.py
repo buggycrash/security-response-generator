@@ -1,5 +1,6 @@
 """Command-line interface for security-response-generator."""
 
+import re
 from datetime import date
 from pathlib import Path
 
@@ -31,6 +32,11 @@ from security_response_generator.llm.ollama_client import chat_messages
 
 app = typer.Typer(help="Local RAG CLI for drafting security control responses.")
 console = Console(stderr=True)
+
+_INLINE_VALIDATIONS_RE = re.compile(
+    r"\n\s*(?:#{1,6}\s*)?\[Validations\]\s*:?\s*\n.*\Z",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 @app.command("update-nist")
@@ -281,7 +287,7 @@ def generate(
         output_format=output_format,
     )
 
-    response_text = _run_conversation(prompt)
+    response_text = _run_conversation(prompt, output_format)
 
     if output_format == OutputFormat.text:
         response_text = normalize_to_ascii(response_text)
@@ -369,15 +375,8 @@ def _active_engagement_or_exit() -> engagements.Engagement:
 def _show_demo_reminder(engagement: engagements.Engagement) -> None:
     if engagement.is_demo:
         typer.echo(
-            "\nUsing DEMO engagement.\n\n"
-            "To create your first engagement:\n"
-            "  srg create-engagement <governing-state>-<system-name>\n\n"
-            "For example:\n"
-            "  srg create-engagement northbridge-SALI\n\n"
-            "If you already created an engagement, list the available engagements:\n"
-            "  srg list-engagements\n\n"
-            "Then activate the one you want to use:\n"
-            "  srg use-engagement <engagement-name>",
+            "\nUsing DEMO engagement. To create your first engagement, see README.md "
+            "#create-a-customer-engagement.",
             err=True,
         )
 
@@ -388,7 +387,22 @@ def _wait_for_model(messages: list[dict], label: str = "Thinking...") -> str:
         return chat_messages(messages, response_format=RESPONSE_SCHEMA)
 
 
-def _run_conversation(prompt: AssembledPrompt) -> str:
+def _render_final_reply(raw_reply: str, output_format: OutputFormat) -> str:
+    reply = parse_model_reply(raw_reply)
+    response = reply.response or raw_reply
+    response = _INLINE_VALIDATIONS_RE.sub("", response).rstrip()
+    validations = reply.validations or ["[PLACEHOLDER: no screenshot validations were generated.]"]
+    if output_format == OutputFormat.markdown:
+        validation_text = "\n".join(f"* {validation}" for validation in validations)
+    else:
+        validation_text = "\n".join(validations)
+    return f"{response.rstrip()}\n\n[Validations]\n\n{validation_text}"
+
+
+def _run_conversation(
+    prompt: AssembledPrompt,
+    output_format: OutputFormat = OutputFormat.markdown,
+) -> str:
     """Run the generation call, handling up to config.MAX_FOLLOWUP_TURNS
     interactive clarifying questions before returning the final response.
 
@@ -407,14 +421,14 @@ def _run_conversation(prompt: AssembledPrompt) -> str:
         raw_reply = _wait_for_model(messages)
         reply = parse_model_reply(raw_reply)
         if not reply.needs_info:
-            return reply.response or raw_reply
+            return _render_final_reply(raw_reply, output_format)
 
         messages.append({"role": "assistant", "content": raw_reply})
 
         if followups_remaining <= 0:
             messages.append({"role": "user", "content": FORCED_COMPLETION_INSTRUCTION})
             raw_reply = _wait_for_model(messages, "Wrapping up...")
-            return parse_model_reply(raw_reply).response or raw_reply
+            return _render_final_reply(raw_reply, output_format)
 
         typer.echo(f"\n{reply.question}\n")
         answer = typer.prompt("Your answer")
