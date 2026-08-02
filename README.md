@@ -4,6 +4,23 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
+## Why SRG?
+
+SRG is built for a specific, common situation: a small team has no dedicated
+security professional, but still needs to write clear prose explaining how
+its system satisfies security controls. That work often falls to an existing
+team member who understands the system but does not spend every day writing
+control responses.
+
+After an hour or two of initial setup, that team member can produce a draft
+response in minutes instead of starting from a blank page. SRG maps the prose
+to the applicable NIST requirements and customer-specific parameters, using
+concrete system details supplied either in reusable private context files or
+with the individual request. The result is a faster drafting process with
+more consistent requirement coverage, terminology, and writing style across
+controls and over time. Every response remains a draft and should be reviewed
+for accuracy before it is submitted.
+
 Security Response Generator (`srg`) is a local CLI that drafts NIST SP
 800-53 Release 5.2.0 control responses from:
 
