@@ -7,7 +7,11 @@ from security_response_generator.generation.prompt import (
     FORCED_COMPLETION_INSTRUCTION,
     AssembledPrompt,
 )
-from security_response_generator.generation.retrieval import RetrievalResult, RetrievedChunk
+from security_response_generator.generation.retrieval import (
+    ChatRetrievalResult,
+    RetrievalResult,
+    RetrievedChunk,
+)
 from security_response_generator.ingest.chunking import Chunk
 
 runner = CliRunner()
@@ -264,6 +268,79 @@ def test_generate_markdown_format_default_output_filename_uses_md_extension(monk
     assert result.exit_code == 0
     written_files = list(tmp_path.glob("demo_SI-5_*.md"))
     assert len(written_files) == 1
+
+
+def _patch_chat_common(
+    monkeypatch, chat_result: ChatRetrievalResult, chat_return: str = "answer text"
+):
+    demo = cli.engagements.Engagement(
+        "demo",
+        "DEMO",
+        cli.config.ENGAGEMENTS_DIR / "demo",
+    )
+    monkeypatch.setattr(cli, "_active_engagement_or_exit", lambda: demo)
+    monkeypatch.setattr(cli, "get_client", lambda path=None: object())
+    monkeypatch.setattr(cli, "get_collection", lambda client, name: object())
+    monkeypatch.setattr(cli, "retrieve_for_chat", lambda question, collections: chat_result)
+    monkeypatch.setattr(cli, "chat_messages", lambda messages, response_format=None: chat_return)
+
+
+def test_chat_prints_answer_labeled_with_engagement_and_draft_disclaimer(monkeypatch):
+    chat_result = ChatRetrievalResult(
+        customer_chunks=[_baseline_chunk("customer.md::0")],
+        baseline_chunks=[_baseline_chunk("baseline.md::0")],
+        private_chunks=[_baseline_chunk("private.md::0")],
+    )
+    _patch_chat_common(monkeypatch, chat_result, chat_return="Passwords must be 14+ characters.")
+
+    result = runner.invoke(cli.app, ["chat", "What is the password complexity requirement?"])
+
+    assert result.exit_code == 0
+    assert "Customer: DEMO" in result.stdout
+    assert "Passwords must be 14+ characters." in result.stdout
+    assert "Draft answer" in result.stdout
+
+
+def test_chat_answers_even_when_nothing_retrieved(monkeypatch):
+    chat_result = ChatRetrievalResult(customer_chunks=[], baseline_chunks=[], private_chunks=[])
+    chat_called = {"value": False}
+
+    def fake_chat_messages(messages, response_format=None):
+        chat_called["value"] = True
+        return "The indexed material doesn't cover that."
+
+    _patch_chat_common(monkeypatch, chat_result)
+    monkeypatch.setattr(cli, "chat_messages", fake_chat_messages)
+
+    result = runner.invoke(cli.app, ["chat", "What color is the sky?"])
+
+    assert result.exit_code == 0
+    assert chat_called["value"] is True
+    assert "doesn't cover that" in result.stdout
+
+
+def test_chat_answers_when_only_customer_standards_match(monkeypatch):
+    chat_result = ChatRetrievalResult(
+        customer_chunks=[_baseline_chunk("customer.md::0")],
+        baseline_chunks=[],
+        private_chunks=[],
+    )
+    _patch_chat_common(monkeypatch, chat_result, chat_return="Reviewed weekly per state policy.")
+
+    result = runner.invoke(cli.app, ["chat", "How often are audit logs reviewed?"])
+
+    assert result.exit_code == 0
+    assert "Reviewed weekly per state policy." in result.stdout
+
+
+def test_chat_shows_demo_reminder(monkeypatch):
+    chat_result = ChatRetrievalResult(customer_chunks=[], baseline_chunks=[], private_chunks=[])
+    _patch_chat_common(monkeypatch, chat_result)
+
+    result = runner.invoke(cli.app, ["chat", "What is the password complexity requirement?"])
+
+    assert result.exit_code == 0
+    assert "Using DEMO engagement" in result.output
 
 
 def _prompt() -> AssembledPrompt:

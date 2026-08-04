@@ -25,6 +25,7 @@ ENGAGEMENTS_DIR = PROJECT_ROOT / "engagements"
 ACTIVE_ENGAGEMENT_PATH = PROJECT_ROOT / ".srg" / "active-engagement"
 
 INSTRUCTIONS_PATH = PROJECT_ROOT / "prompts" / "instructions.md"
+CHAT_INSTRUCTIONS_PATH = PROJECT_ROOT / "prompts" / "chat_instructions.md"
 
 COLLECTION_KNOWLEDGE_BASE = "knowledge_base"
 COLLECTION_CUSTOMER_STANDARDS = "customer_standards"

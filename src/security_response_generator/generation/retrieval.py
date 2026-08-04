@@ -141,6 +141,44 @@ def _safe_query(
     return to_chunks(result)
 
 
+def semantic_search(collection, query_embedding, top_k: int) -> list[RetrievedChunk]:
+    """Semantic-only nearest-neighbor lookup, for callers with no control ID to
+    anchor an exact-match pass (e.g. freeform chat questions)."""
+    return _safe_query(collection, query_embedding, top_k)
+
+
+@dataclass
+class ChatRetrievalResult:
+    customer_chunks: list[RetrievedChunk]
+    baseline_chunks: list[RetrievedChunk]
+    private_chunks: list[RetrievedChunk]
+
+    @property
+    def has_any_match(self) -> bool:
+        return bool(self.customer_chunks or self.baseline_chunks or self.private_chunks)
+
+
+def retrieve_for_chat(question: str, collections: dict) -> ChatRetrievalResult:
+    query_embedding = embed_query(question)
+    return ChatRetrievalResult(
+        customer_chunks=semantic_search(
+            collections[config.COLLECTION_CUSTOMER_STANDARDS],
+            query_embedding,
+            config.TOP_K_CUSTOMER_STANDARDS,
+        ),
+        baseline_chunks=semantic_search(
+            collections[config.COLLECTION_KNOWLEDGE_BASE],
+            query_embedding,
+            config.TOP_K_KNOWLEDGE_BASE,
+        ),
+        private_chunks=semantic_search(
+            collections[config.COLLECTION_PRIVATE_CONTEXT],
+            query_embedding,
+            config.TOP_K_PRIVATE_CONTEXT,
+        ),
+    )
+
+
 def retrieve_for_control(control_id: str, context_notes: str, collections: dict) -> RetrievalResult:
     query_text = f"{control_id} {context_notes}".strip()
     query_embedding = embed_query(query_text)

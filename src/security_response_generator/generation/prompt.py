@@ -173,3 +173,29 @@ def assemble_prompt(
     sections.append(_FORMAT_INSTRUCTIONS[output_format])
 
     return AssembledPrompt(system="\n\n".join(system_sections), user="\n\n".join(sections))
+
+
+def assemble_chat_prompt(
+    instructions: str,
+    question: str,
+    customer_chunks: list[RetrievedChunk],
+    baseline_chunks: list[RetrievedChunk],
+    private_chunks: list[RetrievedChunk],
+) -> AssembledPrompt:
+    sections: list[str] = []
+
+    if customer_chunks:
+        sections.append(CUSTOMER_LABEL)
+        sections.extend(chunk.text for chunk in customer_chunks)
+
+    if baseline_chunks:
+        sections.append(BASELINE_LABEL)
+        sections.extend(chunk.text for chunk in baseline_chunks)
+
+    if private_chunks:
+        sections.append(PRIVATE_LABEL)
+        sections.extend(chunk.text for chunk in private_chunks)
+
+    sections.append(f"Question: {question}")
+
+    return AssembledPrompt(system=instructions, user="\n\n".join(sections))

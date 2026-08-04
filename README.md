@@ -228,12 +228,35 @@ srg generate SI-5 --format text -o response.txt
 Plain-text output retains normal capitalization while removing Markdown,
 Unicode punctuation, and other non-ASCII characters.
 
+## Ask a question
+
+While not a general chatbot, SRG does allow the user to query the system
+for information that might only be apparent after cross checking several
+documents, or perhaps requires interpreting vague or conflicting customer
+guidance.
+
+`srg chat` answers a freeform question grounded in the active engagement's
+indexed material -- the customer/state standard, NIST 800-53 baseline, and
+private system context -- without needing a specific control ID:
+
+```bash
+srg chat "What is the password complexity requirement?"
+srg chat "Does the customer provide a System Integrity policy?"
+```
+
+Unlike `srg generate`, `chat` is a single-shot lookup: it prints one answer
+and exits. The answer is grounded only in retrieved material; if nothing
+indexed covers the question, the model says so rather than guessing. Output
+is labeled with the active engagement and carries a draft-answer disclaimer,
+the same as `generate`.
+
 ## Common next steps
 
 ```bash
 srg --help
 srg ingest --help
 srg generate --help
+srg chat --help
 ```
 
 See [docs/technical-readme.md](docs/technical-readme.md) for:

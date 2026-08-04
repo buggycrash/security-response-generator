@@ -9,6 +9,7 @@ from security_response_generator.generation.prompt import (
     PRIVATE_LABEL,
     TEXT_FORMAT_INSTRUCTION,
     OutputFormat,
+    assemble_chat_prompt,
     assemble_prompt,
     parse_model_reply,
 )
@@ -174,3 +175,50 @@ def test_parse_model_reply_falls_back_to_raw_text_when_needs_info_missing():
 
     assert reply.needs_info is False
     assert reply.response == '{"question": null, "response": "some text"}'
+
+
+def test_chat_prompt_includes_all_sections_in_order_when_all_tiers_present():
+    prompt = assemble_chat_prompt(
+        instructions="CHAT SYSTEM INSTRUCTIONS",
+        question="What is the password complexity requirement?",
+        customer_chunks=[_chunk("state standard text")],
+        baseline_chunks=[_chunk("nist baseline text")],
+        private_chunks=[_chunk("private system text")],
+    )
+
+    assert prompt.system == "CHAT SYSTEM INSTRUCTIONS"
+    assert prompt.user.index(CUSTOMER_LABEL) < prompt.user.index(BASELINE_LABEL)
+    assert prompt.user.index(BASELINE_LABEL) < prompt.user.index(PRIVATE_LABEL)
+    assert "state standard text" in prompt.user
+    assert "nist baseline text" in prompt.user
+    assert "private system text" in prompt.user
+    assert "Question: What is the password complexity requirement?" in prompt.user
+
+
+def test_chat_prompt_omits_all_section_labels_when_no_chunks_found():
+    prompt = assemble_chat_prompt(
+        instructions="CHAT SYSTEM INSTRUCTIONS",
+        question="What is the password complexity requirement?",
+        customer_chunks=[],
+        baseline_chunks=[],
+        private_chunks=[],
+    )
+
+    assert CUSTOMER_LABEL not in prompt.user
+    assert BASELINE_LABEL not in prompt.user
+    assert PRIVATE_LABEL not in prompt.user
+    assert "Question: What is the password complexity requirement?" in prompt.user
+
+
+def test_chat_prompt_omits_only_missing_tiers():
+    prompt = assemble_chat_prompt(
+        instructions="CHAT SYSTEM INSTRUCTIONS",
+        question="How often must audit logs be reviewed?",
+        customer_chunks=[_chunk("state standard text")],
+        baseline_chunks=[],
+        private_chunks=[],
+    )
+
+    assert CUSTOMER_LABEL in prompt.user
+    assert BASELINE_LABEL not in prompt.user
+    assert PRIVATE_LABEL not in prompt.user
