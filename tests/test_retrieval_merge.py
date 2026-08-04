@@ -1,3 +1,4 @@
+from security_response_generator import config
 from security_response_generator.generation import retrieval
 from security_response_generator.generation.retrieval import (
     RetrievalResult,
@@ -212,3 +213,48 @@ def test_retrieval_result_customer_caveat_flag():
         baseline_exact_match=True,
     )
     assert with_customer.has_customer_match is True
+
+
+def test_semantic_search_returns_chunks_from_query():
+    collection = _FakeCollection(
+        exact_match_result=_flat_result([]), semantic_result=_raw_result(["a", "b"])
+    )
+
+    chunks = retrieval.semantic_search(collection, [0.0], top_k=5)
+
+    assert [c.chunk_id for c in chunks] == ["a", "b"]
+
+
+def test_semantic_search_returns_empty_on_query_failure():
+    class _RaisingCollection:
+        def query(self, **kwargs):
+            raise RuntimeError("collection unavailable")
+
+    assert retrieval.semantic_search(_RaisingCollection(), [0.0], top_k=5) == []
+
+
+def test_retrieve_for_chat_queries_all_three_collections_with_shared_embedding(monkeypatch):
+    monkeypatch.setattr(retrieval, "embed_query", lambda text: [0.0])
+    collections = {
+        config.COLLECTION_CUSTOMER_STANDARDS: _FakeCollection(
+            _flat_result([]), _raw_result(["c1"])
+        ),
+        config.COLLECTION_KNOWLEDGE_BASE: _FakeCollection(_flat_result([]), _raw_result(["b1"])),
+        config.COLLECTION_PRIVATE_CONTEXT: _FakeCollection(_flat_result([]), _raw_result(["p1"])),
+    }
+
+    result = retrieval.retrieve_for_chat("what is the password policy?", collections)
+
+    assert [c.chunk_id for c in result.customer_chunks] == ["c1"]
+    assert [c.chunk_id for c in result.baseline_chunks] == ["b1"]
+    assert [c.chunk_id for c in result.private_chunks] == ["p1"]
+
+
+def test_chat_retrieval_result_has_any_match():
+    empty = retrieval.ChatRetrievalResult(customer_chunks=[], baseline_chunks=[], private_chunks=[])
+    assert empty.has_any_match is False
+
+    with_one_match = retrieval.ChatRetrievalResult(
+        customer_chunks=[], baseline_chunks=[_chunk("a")], private_chunks=[]
+    )
+    assert with_one_match.has_any_match is True

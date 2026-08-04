@@ -15,10 +15,11 @@ from security_response_generator.generation.prompt import (
     RESPONSE_SCHEMA,
     AssembledPrompt,
     OutputFormat,
+    assemble_chat_prompt,
     assemble_prompt,
     parse_model_reply,
 )
-from security_response_generator.generation.retrieval import retrieve_for_control
+from security_response_generator.generation.retrieval import retrieve_for_chat, retrieve_for_control
 from security_response_generator.ingest import loaders, nist_oscal
 from security_response_generator.ingest import manifest as manifest_module
 from security_response_generator.ingest.chunking import chunk_text
@@ -307,6 +308,54 @@ def generate(
         write_encoding = "ascii" if output_format == OutputFormat.text else "utf-8"
         target.write_text(response_text, encoding=write_encoding)
         typer.echo(f"Written to {target}", err=True)
+    _show_demo_reminder(engagement)
+
+
+@app.command()
+def chat(
+    question: str = typer.Argument(
+        ...,
+        help="A question about the active engagement's standards, NIST baseline, or context.",
+    ),
+) -> None:
+    """Answer a freeform question grounded in the active engagement's indexed material."""
+    engagement = _active_engagement_or_exit()
+    baseline_client = get_client(config.CHROMA_DIR)
+    engagement_client = get_client(engagement.chroma_dir)
+    collections = {
+        config.COLLECTION_KNOWLEDGE_BASE: get_collection(
+            baseline_client, config.COLLECTION_KNOWLEDGE_BASE
+        ),
+        config.COLLECTION_CUSTOMER_STANDARDS: get_collection(
+            engagement_client, config.COLLECTION_CUSTOMER_STANDARDS
+        ),
+        config.COLLECTION_PRIVATE_CONTEXT: get_collection(
+            engagement_client, config.COLLECTION_PRIVATE_CONTEXT
+        ),
+    }
+
+    result = retrieve_for_chat(question, collections)
+
+    instructions = config.CHAT_INSTRUCTIONS_PATH.read_text(encoding="utf-8")
+    prompt = assemble_chat_prompt(
+        instructions=instructions,
+        question=question,
+        customer_chunks=result.customer_chunks,
+        baseline_chunks=result.baseline_chunks,
+        private_chunks=result.private_chunks,
+    )
+    messages = [
+        {"role": "system", "content": prompt.system},
+        {"role": "user", "content": prompt.user},
+    ]
+    with console.status("Thinking..."):
+        response_text = chat_messages(messages)
+
+    typer.echo()
+    typer.echo(
+        f"Customer: {engagement.response_customer_name}\n\n{response_text}\n\n"
+        "(Draft answer -- verify against source material before relying on it.)"
+    )
     _show_demo_reminder(engagement)
 
 

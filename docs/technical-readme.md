@@ -32,8 +32,7 @@ Chroma product telemetry.
   [Choosing a generation model](#choosing-a-generation-model)) rather than a
   closed-source or overseas API.
 - Refuses to answer (rather than hallucinate) if a control ID has no match
-  in the NIST baseline. SRG is a dedicated control-response tool, not a
-  general chatbot.
+  in the NIST baseline.
 - Interactive follow-up questions when a material part of the control isn't
   covered by the supplied context, up to a configurable round limit, with a
   best-effort placeholder-annotated response if the model still isn't done.

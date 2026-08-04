@@ -7,6 +7,8 @@
 
 ## Done
 
+- [x] Create a general chat feature, helpful if the engineer needs to
+      understand customer specific guidance.
 - [x] Add an elevator pitch to the main README explaining the small-team
       control-response workflow and the project's value.
 - [x] Move the project to its own dedicated repository with standard project
