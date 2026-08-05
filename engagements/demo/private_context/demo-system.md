@@ -20,11 +20,14 @@ reviewed within one business day. Relevant advisories are assigned to the
 DEMO-ECMS system owner and engineering lead for impact analysis,
 remediation, and closure tracking.
 
+Alerts received from the Department of Community Services Security Operations
+Center (DoCS SOC) are reviewed by the DEMO-ECMS Tech Lead and disseminated
+internally to appropriate engineers.
+
 ## Web attack prevention
 
-The DEMO-ECMS public web application is protected by a managed web application
-firewall using the OWASP Core Rule Set and organization-specific rules.
-Requests pass through a managed load balancer before reaching the
+The DEMO-ECMS public web application is protected by a cloud based web application (WAF) using the OWASP Core Rule Set and organization-specific rules.
+Requests pass through a cloud based load balancer before reaching the
 application containers. The firewall blocks common injection, cross-site
 scripting, malicious file-upload, and known hostile IP patterns.
 
@@ -46,31 +49,32 @@ rules but cannot change the provider's underlying network protection.
 
 ## Identity, Authentication, and Access
 
-- Public users authenticate through Example Login, a fictional external
-  identity service.
-- Workforce users authenticate through the enterprise identity provider
-  using phishing-resistant multifactor authentication.
-- Administrative access requires a separate privileged role.
-- Role-based access control limits users to assigned job functions.
-- Access reviews occur quarterly and when personnel change roles.
+- Public users authenticate through ExampleLogin, a fictional external
+  identity service that supports but does not mandate phishing resistant
+  verifiers.
+- Workforce users authenticate through the Enterprise-managed identity
+  provider using phishing-resistant multifactor authentication.
+- Administrative access requires a separate privileged role, rather than
+  a distinct account.
+- Role-based access control (RBAC) limits users to assigned job functions.
+- Access reviews occur quarterly and when personnel change roles or leave
+  the team.
 - Authentication, authorization, and administrative events are logged.
 
 ## Organizational Structure and Separation of Duties
 
-- The DEMO-ECMS system owner approves production access and accepts system
-  risk.
+- The Department of Community Services Authorizing Official (AO) approves        production access and accepts system risk for DEMO-ECMS.
 - The engineering team develops and maintains application code.
 - The platform team administers the container and database services.
-- The security operations team monitors alerts and investigates incidents.
+- The In coordination with the DoCS SOC, the DEMO-ECMS security team monitors alerts and investigates incidents.
 - Developers cannot approve their own production deployments.
-- Audit-log administrators cannot alter application business records.
+- There are no dedicated Audit-log administrators due to the small team size.
 
 ## Least Functionality Posture
 
 - Deny by default and allow by documented exception.
 - Only approved network ports, services, packages, and container images are
   permitted in production.
-- Administrative interfaces are restricted to the management network.
 - Unused accounts, sample applications, and default services are disabled.
 - Exceptions require documented business justification, approval, and an
   expiration date.
@@ -78,7 +82,7 @@ rules but cannot change the provider's underlying network protection.
 ## Canonical Decisions and Definitions
 
 - DEMO-ECMS may store fictional moderate-impact case information but may
-  not store classified information or payment card data.
+  not store classified information or payment card (PCI) data.
 - A high-priority security alert requires immediate triage.
 - A lower-priority alert must be reviewed by the end of the next business
   day.
@@ -96,6 +100,3 @@ rules but cannot change the provider's underlying network protection.
 - AC-5 - Separation of Duties: system-owner approval, independent deployment
   approval, separate platform and security operations responsibilities, and
   restricted audit-log administration.
-- SI-5 - Security Alerts, Advisories, and Directives: security operations
-  reviews advisories within one business day, assigns relevant items for
-  impact analysis and remediation, and tracks them through closure.
