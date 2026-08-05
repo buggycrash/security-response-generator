@@ -32,7 +32,8 @@ Chroma product telemetry.
   [Choosing a generation model](#choosing-a-generation-model)) rather than a
   closed-source or overseas API.
 - Refuses to answer (rather than hallucinate) if a control ID has no match
-  in the NIST baseline.
+  in the NIST baseline. SRG is a dedicated control-response tool, not a
+  general chatbot.
 - Interactive follow-up questions when a material part of the control isn't
   covered by the supplied context, up to a configurable round limit, with a
   best-effort placeholder-annotated response if the model still isn't done.
@@ -343,8 +344,8 @@ environment. This means `srg` works from any directory after setup.
    The first request may take longer while Ollama loads the model. SRG prints
    Markdown to stdout by default. Add `-o response.md` to also write
    it to a file (or to a directory, in which case a customer-labeled filename
-   like `virginia_SI-5_20260715.md` is generated). Every response begins
-   with `Customer: Virginia` (or `Customer: DEMO`) and ends with a
+   like `northbridge_SI-5_20260715.md` is generated). Every response begins
+   with `Customer: Northbridge` (or `Customer: DEMO`) and ends with a
    `[Validations]` section containing suggested screenshot evidence.
    A spinner appears on stderr while waiting for the model, leaving stdout
    clean for piping and redirection.
@@ -437,15 +438,15 @@ it does not remove the need for grounded inputs or human review of the draft.
 
 ## Customer engagements
 
-Customer documents and indexes are isolated under `engagements/<name>/`.
+Customer documents and indexes are isolated under `engagements/<state name>-<system name>/`.
 The NIST baseline remains shared and is not duplicated for each customer.
 
 ```bash
-srg create-engagement virginia  # creates and activates it
-srg show-engagement             # shows active folders
+srg create-engagement northbridge-SALI  # creates and activates it
+srg show-engagement                     # shows active folders
 srg list-engagements
 srg use-engagement demo
-srg use-engagement virginia
+srg use-engagement northbridge-SALI
 ```
 
 Creating an engagement makes empty `customer_standards/`, `private_context/`,
