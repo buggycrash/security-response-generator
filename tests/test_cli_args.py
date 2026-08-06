@@ -445,6 +445,52 @@ def test_run_conversation_forces_completion_when_budget_exhausted(monkeypatch):
     assert prompt_call_count["value"] == 2
 
 
+def test_run_conversation_tracked_reports_no_forced_completion_on_first_try(monkeypatch):
+    monkeypatch.setattr(
+        cli, "chat_messages", lambda messages, response_format=None: _final_reply("body")
+    )
+
+    outcome = cli._run_conversation_tracked(_prompt())
+
+    assert outcome.text == _rendered_reply("body")
+    assert outcome.forced_completion is False
+
+
+def test_run_conversation_tracked_reports_forced_completion_flag(monkeypatch):
+    replies = iter([_followup_reply("what SIEM?"), _final_reply("best effort body")])
+    monkeypatch.setattr(cli, "chat_messages", lambda messages, response_format=None: next(replies))
+
+    outcome = cli._run_conversation_tracked(_prompt(), max_followups=0)
+
+    assert outcome.text == _rendered_reply("best effort body")
+    assert outcome.forced_completion is True
+
+
+def test_run_conversation_respects_explicit_max_followups_override_independent_of_config(
+    monkeypatch,
+):
+    # config.MAX_FOLLOWUP_TURNS is left at its real default (not monkeypatched) to prove
+    # an explicit max_followups argument takes precedence rather than being shadowed by
+    # a bound-at-definition-time default.
+    replies = iter([_followup_reply("what SIEM?"), _final_reply("best effort body")])
+    calls = []
+
+    def fake_chat_messages(messages, response_format=None):
+        calls.append(list(messages))
+        return next(replies)
+
+    monkeypatch.setattr(cli, "chat_messages", fake_chat_messages)
+    monkeypatch.setattr(
+        cli.typer, "prompt", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("no prompt"))
+    )
+
+    outcome = cli._run_conversation_tracked(_prompt(), max_followups=0)
+
+    assert outcome.forced_completion is True
+    assert len(calls) == 2
+    assert calls[1][-1] == {"role": "user", "content": FORCED_COMPLETION_INSTRUCTION}
+
+
 def test_run_conversation_forced_completion_message_included_in_final_call(monkeypatch):
     monkeypatch.setattr(cli.config, "MAX_FOLLOWUP_TURNS", 0)
     replies = iter(

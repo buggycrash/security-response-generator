@@ -45,6 +45,11 @@ generation model connects the two even when the wording differs.
 - Interactive follow-up questions when a material part of the control isn't
   covered by the supplied context, up to a configurable round limit, with a
   best-effort placeholder-annotated response if the model still isn't done.
+- Bulk, fully noninteractive generation from a CSV of control IDs and
+  per-control context (`srg bulk-generate`), one output file per row, with
+  control-specific problems noted inside that control's own file instead of
+  asked as a question. See
+  [Bulk-generate from a CSV](#bulk-generate-from-a-csv).
 - Incremental ingestion — only re-embeds files that changed.
 - Reproducible download and conversion of official NIST SP 800-53 OSCAL
   catalogs into chunker-compatible Markdown.
@@ -396,6 +401,57 @@ by hand before submitting to the assessor.
 The tool is designed to produce a bounded, best-effort draft rather than
 questioning indefinitely.
 
+## Bulk-generate from a CSV
+
+`srg bulk-generate` drafts responses for many controls in one unattended run.
+It never asks a follow-up question and never blocks on input — a control that
+would have needed one gets a best-effort response instead, exactly like
+`srg generate` after its follow-up budget runs out (see
+[Interactive follow-up questions](#interactive-follow-up-questions)).
+
+```bash
+srg bulk-generate -o engagements/northbridge-SALI/responses controls.csv 
+```
+
+The CSV needs exactly two columns, matched case- and whitespace-insensitively
+(extra columns are ignored):
+
+```csv
+Control ID,User added context
+AC-2,Uses Okta for account provisioning and deprovisioning.
+SI-5,we use Acme Sentinel for monitoring
+SC-8(1),TLS 1.3 protects information in transit.
+```
+
+![](images/image9.png)
+
+**Upfront file validation** (checked before touching Ollama, Chroma, or the
+active engagement at all, and reported together rather than one at a time):
+missing either required column, no data rows, more rows than
+`SRG_MAX_BULK_CONTROLS` (default **25** — enough to cover an entire control
+family other than SC), a malformed control ID, an empty Control ID cell, or a
+duplicate control ID.
+
+**Per-control problems vs. run-wide failures** are handled differently:
+
+- A problem specific to one control — its ID has no match in the ingested
+  NIST baseline, or the model would have asked a clarifying question — is
+  written into *that control's own output file* as a note, and the run
+  continues with the next row.
+- A problem that would affect every remaining row identically — Ollama is
+  unreachable, the configured model is invalid, the knowledge base hasn't
+  been ingested, or a file can't be written to the output directory — aborts
+  the whole run immediately. Files already written for earlier rows are left
+  in place, and the tool reports which controls completed and which weren't
+  attempted.
+
+Each successful row is written to `<output-dir>/<engagement-slug>_<control
+ID>_<date>.<ext>`, the same naming convention `srg generate -o` uses for a
+directory target. Re-running the same CSV against the same output directory
+on the same day overwrites that control's prior file, matching
+`srg generate -o`'s existing behavior. `--format text` and the
+`SRG_MAX_BULK_CONTROLS` override work the same way they do for `generate`.
+
 ## Improving output quality
 
 Output quality depends first on the facts available to the model and then on
@@ -569,7 +625,7 @@ security-response-generator/
 │   └── Federal/ VA/ PA/ CA/ MD/ HI/ # copy into an engagement as applicable
 ├── docs/                            # technical guide, examples, and images
 ├── src/security_response_generator/
-│   ├── cli.py                       # update, ingest, engagement, and generation commands
+│   ├── cli.py                       # update, ingest, engagement, generation, and bulk-generate commands
 │   ├── config.py                    # models, paths, chunking, top-k (env-overridable)
 │   ├── ingest/                      # loaders, chunking, manifest, Chroma store
 │   ├── generation/                  # retrieval, prompt assembly, ASCII normalizer
@@ -588,6 +644,11 @@ security-response-generator/
   Python, launcher, Ollama, and model health checks.
 - **`srg generate` refuses every control ID**: run `srg ingest` first — the
   NIST baseline collection is empty until `knowledge_base/` is ingested.
+- **`srg bulk-generate` rejects the CSV outright**: it prints every problem it
+  found (wrong/missing column headers, too many rows, a duplicate or
+  malformed control ID) before generating anything — see
+  [Bulk-generate from a CSV](#bulk-generate-from-a-csv) for the exact
+  validation rules.
 - **Model pull is slow/fails**: `llama3.1:8b` is an approximately 4.9 GB
   download (see
   [Choosing a generation model](#choosing-a-generation-model) for model
@@ -669,6 +730,11 @@ end-to-end behavior manually after setup:
     missing and containing `[PLACEHOLDER: ...]` markers rather than
     guessing
 15. `git status` — confirm the test customer's engagement files do not appear
+16. Create a small CSV with one valid control ID and one deliberately bogus
+    one, then run `srg bulk-generate that.csv -o /tmp/bulk-out` — confirm it
+    completes noninteractively, writes one file per row, the bogus row's file
+    contains a "No matching NIST baseline content found" note, and the
+    printed summary counts match (clean vs. with notes)
 
 ## License
 
