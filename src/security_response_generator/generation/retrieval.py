@@ -4,6 +4,7 @@ import re
 from dataclasses import dataclass
 
 from security_response_generator import config
+from security_response_generator.generation.terminology import expand_query
 from security_response_generator.llm.ollama_client import embed_query
 
 # Matches a NIST control/enhancement ID split into its base control and,
@@ -159,7 +160,7 @@ class ChatRetrievalResult:
 
 
 def retrieve_for_chat(question: str, collections: dict) -> ChatRetrievalResult:
-    query_embedding = embed_query(question)
+    query_embedding = embed_query(expand_query(question))
     return ChatRetrievalResult(
         customer_chunks=semantic_search(
             collections[config.COLLECTION_CUSTOMER_STANDARDS],
@@ -181,7 +182,7 @@ def retrieve_for_chat(question: str, collections: dict) -> ChatRetrievalResult:
 
 def retrieve_for_control(control_id: str, context_notes: str, collections: dict) -> RetrievalResult:
     query_text = f"{control_id} {context_notes}".strip()
-    query_embedding = embed_query(query_text)
+    query_embedding = embed_query(expand_query(query_text))
 
     customer_chunks, _ = _query_collection(
         collections[config.COLLECTION_CUSTOMER_STANDARDS],

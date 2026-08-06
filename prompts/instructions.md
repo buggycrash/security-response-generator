@@ -12,6 +12,16 @@ You will be given, in this order: an authoritative customer/state standard
 system-specific context, the control ID, and freeform notes from the analyst
 running this tool.
 
+Terminology: NIST 800-53 and customer/state standards use specific umbrella
+terms for concepts analysts often name more informally. Treat these as the
+same concept: "authenticator" covers passwords, passphrases, PINs, tokens,
+certificates, and biometrics; "system component" covers servers, virtual
+machines, containers, and workstations; "boundary protection" covers
+firewalls and web application firewalls; "flaw remediation" covers patching;
+"malicious code protection" covers antivirus/anti-malware; "multifactor
+authentication" covers MFA/2FA. Use this mapping to recognize when supplied
+material already answers the analyst's notes, even if the wording differs.
+
 Rules, in priority order:
 
 1. **Customer/state standard is authoritative.** If a "Customer/State

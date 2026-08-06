@@ -24,6 +24,14 @@ process). SRG pins Ollama connections to the local loopback interface,
 rejects cloud-tagged Ollama models before sending content, and disables
 Chroma product telemetry.
 
+Retrieval queries (both `generate`'s control/context text and `chat`'s
+freeform question) are also expanded with a small, static NIST-vocabulary
+synonym map (`generation/terminology.py`) before being embedded, so common
+terms analysts use informally (e.g. "password") still surface content that
+only uses the matching NIST umbrella term (e.g. "authenticator", IA-5). The
+system prompts additionally include the same terminology mapping so the
+generation model connects the two even when the wording differs.
+
 ## Features
 
 - Three-tier retrieval that respects customer/state standards as
@@ -425,8 +433,7 @@ a substitute for context. In practical order:
 3. **Use a more capable generation model when hardware permits.** Better
    grounding still requires a model capable of following nuanced context and
    synthesizing a complex control. Gemma 4 E4B was more reliable than the
-   default model on some identical prompts, while Phi-4-mini was insufficient
-   for this workload. See
+   default model on some identical prompts. See
    [Choosing a generation model](#choosing-a-generation-model) and the
    [side-by-side model outputs](Examples-of-SRG-use.md) for the observed
    differences.
