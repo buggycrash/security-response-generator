@@ -46,6 +46,13 @@ TOP_K_PRIVATE_CONTEXT = int(os.environ.get("SRG_PRIVATE_TOPK", "4"))
 
 MAX_FOLLOWUP_TURNS = int(os.environ.get("SRG_MAX_FOLLOWUP_TURNS", "2"))
 
+# Bulk CSV generation processes one control per row, each with its own Chroma
+# retrieval and Ollama call; a generous-but-bounded cap keeps a mistaken/huge CSV
+# from silently kicking off an hours-long unattended run. 25 covers an entire
+# control family except SC (System and Communications Protection, ~50 controls
+# and enhancements).
+MAX_BULK_CONTROLS = int(os.environ.get("SRG_MAX_BULK_CONTROLS", "25"))
+
 # Ollama defaults to a small context window (~2048 tokens) unless told
 # otherwise, which silently truncates prompts assembled from multiple
 # retrieved chunks (worst case: 14 chunks x ~750 tokens + instructions +

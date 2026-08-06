@@ -1,14 +1,17 @@
 """Command-line interface for security-response-generator."""
 
 import re
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
+import ollama
 import typer
 from rich.console import Console
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeElapsedColumn
 
 from security_response_generator import config, engagements
+from security_response_generator.generation import bulk_csv
 from security_response_generator.generation.formatting import normalize_to_ascii
 from security_response_generator.generation.prompt import (
     FORCED_COMPLETION_INSTRUCTION,
@@ -30,6 +33,8 @@ from security_response_generator.ingest.store import (
     upsert_chunks,
 )
 from security_response_generator.llm.ollama_client import chat_messages
+
+_SYSTEMIC_ERRORS = (ConnectionError, ollama.ResponseError, ValueError, OSError)
 
 app = typer.Typer(help="Local RAG CLI for drafting security control responses.")
 console = Console(stderr=True)
@@ -233,6 +238,78 @@ def _upsert_with_progress(collection, relative_path: str, collection_name: str, 
         )
 
 
+def _build_collections(engagement: engagements.Engagement) -> dict:
+    baseline_client = get_client(config.CHROMA_DIR)
+    engagement_client = get_client(engagement.chroma_dir)
+    return {
+        config.COLLECTION_KNOWLEDGE_BASE: get_collection(
+            baseline_client, config.COLLECTION_KNOWLEDGE_BASE
+        ),
+        config.COLLECTION_CUSTOMER_STANDARDS: get_collection(
+            engagement_client, config.COLLECTION_CUSTOMER_STANDARDS
+        ),
+        config.COLLECTION_PRIVATE_CONTEXT: get_collection(
+            engagement_client, config.COLLECTION_PRIVATE_CONTEXT
+        ),
+    }
+
+
+def _label_response(
+    response_text: str, engagement: engagements.Engagement, output_format: OutputFormat
+) -> str:
+    if output_format == OutputFormat.text:
+        response_text = normalize_to_ascii(response_text)
+        customer_label = normalize_to_ascii(engagement.response_customer_name)
+        return f"Customer: {customer_label}\n\n{response_text}"
+    return f"# Customer: {engagement.response_customer_name}\n\n{response_text}"
+
+
+@dataclass
+class ControlGenerationResult:
+    response_text: str
+    has_baseline_match: bool
+    forced_completion: bool  # meaningless when has_baseline_match is False
+
+
+def _generate_control_response(
+    control_id: str,
+    context: str,
+    collections: dict,
+    engagement: engagements.Engagement,
+    output_format: OutputFormat,
+    max_followups: int | None,
+) -> ControlGenerationResult:
+    """Run retrieval + generation for one control. Reused by `generate` (which
+    treats a missing baseline match as fatal) and `bulk-generate` (which
+    instead writes a note into that control's own output file).
+    """
+    result = retrieve_for_control(control_id, context, collections)
+
+    if not result.has_baseline_match:
+        note = (
+            f"No matching NIST baseline content found for control ID '{control_id}' — "
+            "check the ID or run `srg ingest`."
+        )
+        return ControlGenerationResult(
+            _label_response(note, engagement, output_format), False, False
+        )
+
+    instructions = config.INSTRUCTIONS_PATH.read_text(encoding="utf-8")
+    prompt = assemble_prompt(
+        instructions=instructions,
+        control_id=control_id,
+        context_notes=context,
+        customer_chunks=result.customer_chunks,
+        baseline_chunks=result.baseline_chunks,
+        private_chunks=result.private_chunks,
+        output_format=output_format,
+    )
+
+    outcome = _run_conversation_tracked(prompt, output_format, max_followups)
+    labeled = _label_response(outcome.text, engagement, output_format)
+    return ControlGenerationResult(labeled, True, outcome.forced_completion)
+
+
 @app.command()
 def generate(
     control_id: str = typer.Argument(..., help="Control ID, e.g. SI-5"),
@@ -253,22 +330,11 @@ def generate(
 ) -> None:
     """Generate a security control response grounded in the local knowledge base."""
     engagement = _active_engagement_or_exit()
-    baseline_client = get_client(config.CHROMA_DIR)
-    engagement_client = get_client(engagement.chroma_dir)
-    collections = {
-        config.COLLECTION_KNOWLEDGE_BASE: get_collection(
-            baseline_client, config.COLLECTION_KNOWLEDGE_BASE
-        ),
-        config.COLLECTION_CUSTOMER_STANDARDS: get_collection(
-            engagement_client, config.COLLECTION_CUSTOMER_STANDARDS
-        ),
-        config.COLLECTION_PRIVATE_CONTEXT: get_collection(
-            engagement_client, config.COLLECTION_PRIVATE_CONTEXT
-        ),
-    }
+    collections = _build_collections(engagement)
 
-    result = retrieve_for_control(control_id, context, collections)
-
+    result = _generate_control_response(
+        control_id, context, collections, engagement, output_format, max_followups=None
+    )
     if not result.has_baseline_match:
         typer.echo(
             f"No matching NIST baseline content found for control ID '{control_id}' — "
@@ -277,25 +343,7 @@ def generate(
         )
         raise typer.Exit(code=1)
 
-    instructions = config.INSTRUCTIONS_PATH.read_text(encoding="utf-8")
-    prompt = assemble_prompt(
-        instructions=instructions,
-        control_id=control_id,
-        context_notes=context,
-        customer_chunks=result.customer_chunks,
-        baseline_chunks=result.baseline_chunks,
-        private_chunks=result.private_chunks,
-        output_format=output_format,
-    )
-
-    response_text = _run_conversation(prompt, output_format)
-
-    if output_format == OutputFormat.text:
-        response_text = normalize_to_ascii(response_text)
-        customer_label = normalize_to_ascii(engagement.response_customer_name)
-        response_text = f"Customer: {customer_label}\n\n{response_text}"
-    else:
-        response_text = f"# Customer: {engagement.response_customer_name}\n\n{response_text}"
+    response_text = result.response_text
 
     typer.echo()
     typer.echo(response_text)
@@ -320,19 +368,7 @@ def chat(
 ) -> None:
     """Answer a freeform question grounded in the active engagement's indexed material."""
     engagement = _active_engagement_or_exit()
-    baseline_client = get_client(config.CHROMA_DIR)
-    engagement_client = get_client(engagement.chroma_dir)
-    collections = {
-        config.COLLECTION_KNOWLEDGE_BASE: get_collection(
-            baseline_client, config.COLLECTION_KNOWLEDGE_BASE
-        ),
-        config.COLLECTION_CUSTOMER_STANDARDS: get_collection(
-            engagement_client, config.COLLECTION_CUSTOMER_STANDARDS
-        ),
-        config.COLLECTION_PRIVATE_CONTEXT: get_collection(
-            engagement_client, config.COLLECTION_PRIVATE_CONTEXT
-        ),
-    }
+    collections = _build_collections(engagement)
 
     result = retrieve_for_chat(question, collections)
 
@@ -355,6 +391,107 @@ def chat(
     typer.echo(
         f"Customer: {engagement.response_customer_name}\n\n{response_text}\n\n"
         "(Draft answer -- verify against source material before relying on it.)"
+    )
+    _show_demo_reminder(engagement)
+
+
+@app.command("bulk-generate")
+def bulk_generate(
+    csv_path: Path = typer.Argument(
+        ...,
+        exists=True,
+        dir_okay=False,
+        readable=True,
+        help="CSV file with 'Control ID' and 'User added context' columns.",
+    ),
+    output_dir: Path = typer.Option(
+        ...,
+        "-o",
+        "--output-dir",
+        file_okay=False,
+        help="Directory to write one response file per control (created if missing).",
+    ),
+    output_format: OutputFormat = typer.Option(
+        OutputFormat.markdown,
+        "--format",
+        help=(
+            "Output format: markdown (default) or text (plain ASCII, no Markdown syntax "
+            "or special characters -- for evidence/GRC systems that reject formatting)."
+        ),
+    ),
+) -> None:
+    """Generate responses for every row of a CSV file, fully noninteractively.
+
+    Up to config.MAX_BULK_CONTROLS rows per file. No follow-up questions are ever
+    asked; a control that would have needed one gets a best-effort response with
+    an inline note instead. A problem specific to one control (unknown control ID,
+    a suppressed question) is written into that control's own file; a problem
+    affecting every remaining row (Ollama unreachable, knowledge base not
+    ingested) aborts the whole run immediately, leaving already-written files in
+    place.
+    """
+    try:
+        rows = bulk_csv.parse_bulk_csv(csv_path)
+    except bulk_csv.CsvValidationError as exc:
+        typer.echo("Invalid bulk CSV:", err=True)
+        for error in exc.errors:
+            typer.echo(f"  {error}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    engagement = _active_engagement_or_exit()
+    collections = _build_collections(engagement)
+
+    if collections[config.COLLECTION_KNOWLEDGE_BASE].count() == 0:
+        typer.echo(
+            "The NIST knowledge base has no ingested content — run `srg ingest` first.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    total = len(rows)
+    extension = "txt" if output_format == OutputFormat.text else "md"
+    write_encoding = "ascii" if output_format == OutputFormat.text else "utf-8"
+    console.print(f"Bulk generating {total} control response(s) into {output_dir}...")
+
+    completed: list[str] = []
+    noted: list[str] = []
+
+    for index, row in enumerate(rows, start=1):
+        try:
+            result = _generate_control_response(
+                row.control_id,
+                row.context,
+                collections,
+                engagement,
+                output_format,
+                max_followups=0,
+            )
+            target = (
+                output_dir / f"{engagement.slug}_{row.control_id}_{date.today():%Y%m%d}.{extension}"
+            )
+            target.write_text(result.response_text, encoding=write_encoding)
+        except _SYSTEMIC_ERRORS as exc:
+            not_attempted = [r.control_id for r in rows[index - 1 :]]
+            console.print(f"[red]Aborted after {len(completed)}/{total} control(s): {exc}[/red]")
+            console.print(f"Completed: {', '.join(completed) or '(none)'}")
+            console.print(f"Not attempted: {', '.join(not_attempted)}")
+            raise typer.Exit(code=1) from exc
+
+        has_note = not result.has_baseline_match or result.forced_completion
+        completed.append(row.control_id)
+        if has_note:
+            noted.append(row.control_id)
+            console.print(
+                f"[yellow][{index}/{total}][/yellow] {row.control_id} -> {target} (note: see file)"
+            )
+        else:
+            console.print(f"[green][{index}/{total}][/green] {row.control_id} -> {target}")
+
+    clean_count = total - len(noted)
+    console.print(
+        f"\nDone: {clean_count} clean, {len(noted)} with notes, {total} total -> {output_dir}"
     )
     _show_demo_reminder(engagement)
 
@@ -448,41 +585,59 @@ def _render_final_reply(raw_reply: str, output_format: OutputFormat) -> str:
     return f"{response.rstrip()}\n\n[Validations]\n\n{validation_text}"
 
 
-def _run_conversation(
+@dataclass
+class ConversationOutcome:
+    text: str
+    forced_completion: bool
+
+
+def _run_conversation_tracked(
     prompt: AssembledPrompt,
     output_format: OutputFormat = OutputFormat.markdown,
-) -> str:
-    """Run the generation call, handling up to config.MAX_FOLLOWUP_TURNS
-    interactive clarifying questions before returning the final response.
+    max_followups: int | None = None,
+) -> ConversationOutcome:
+    """Run the generation call, handling up to max_followups (or
+    config.MAX_FOLLOWUP_TURNS if not given) interactive clarifying questions
+    before returning the final response.
 
     If the model still hasn't produced a final answer once the follow-up
     budget is exhausted, one last forced-completion call is made and its
     result is returned unconditionally (best-effort response with
-    placeholders for whatever couldn't be addressed).
+    placeholders for whatever couldn't be addressed). Passing
+    max_followups=0 makes this fully noninteractive: the first needs_info
+    reply immediately triggers forced completion without ever prompting.
     """
     messages = [
         {"role": "system", "content": prompt.system},
         {"role": "user", "content": prompt.user},
     ]
-    followups_remaining = config.MAX_FOLLOWUP_TURNS
+    followups_remaining = config.MAX_FOLLOWUP_TURNS if max_followups is None else max_followups
 
     while True:
         raw_reply = _wait_for_model(messages)
         reply = parse_model_reply(raw_reply)
         if not reply.needs_info:
-            return _render_final_reply(raw_reply, output_format)
+            return ConversationOutcome(_render_final_reply(raw_reply, output_format), False)
 
         messages.append({"role": "assistant", "content": raw_reply})
 
         if followups_remaining <= 0:
             messages.append({"role": "user", "content": FORCED_COMPLETION_INSTRUCTION})
             raw_reply = _wait_for_model(messages, "Wrapping up...")
-            return _render_final_reply(raw_reply, output_format)
+            return ConversationOutcome(_render_final_reply(raw_reply, output_format), True)
 
         typer.echo(f"\n{reply.question}\n")
         answer = typer.prompt("Your answer")
         messages.append({"role": "user", "content": answer})
         followups_remaining -= 1
+
+
+def _run_conversation(
+    prompt: AssembledPrompt,
+    output_format: OutputFormat = OutputFormat.markdown,
+) -> str:
+    """Back-compat wrapper around _run_conversation_tracked for existing callers."""
+    return _run_conversation_tracked(prompt, output_format).text
 
 
 if __name__ == "__main__":
