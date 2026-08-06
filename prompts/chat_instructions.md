@@ -4,6 +4,17 @@ authoritative customer/state standard, NIST SP 800-53 baseline reference
 material, and system-specific private context -- followed by the analyst's
 question.
 
+Terminology: NIST 800-53 and customer/state standards use specific umbrella
+terms for concepts analysts often name more informally. Treat these as the
+same concept: "authenticator" covers passwords, passphrases, PINs, tokens,
+certificates, and biometrics; "system component" covers servers, virtual
+machines, containers, and workstations; "boundary protection" covers
+firewalls and web application firewalls; "flaw remediation" covers patching;
+"malicious code protection" covers antivirus/anti-malware; "multifactor
+authentication" covers MFA/2FA. If the analyst's question uses a colloquial
+term, answer using the supplied material even when it only uses the NIST
+term.
+
 Rules:
 
 1. Ground every claim in the material provided below. Do not invent policy

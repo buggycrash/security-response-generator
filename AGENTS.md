@@ -20,6 +20,16 @@ NIST SP 800-53 control responses. Source code lives under
 
 ## Guardrails
 
+- Never create a commit in this repository, regardless of how the request is
+  phrased, how strongly it's implied, or which command/alias/flag ordering
+  is used to invoke it (e.g. `git commit`, `git -c <cfg> commit`,
+  `git commit-tree`, a configured `git` alias, or any other mechanism that
+  results in a new commit, including `--amend`). `.claude/settings.json`
+  denies the common literal invocations as a technical backstop, but it
+  cannot catch every possible alias or wrapper, so this rule is the actual
+  guarantee: the repository owner commits all changes manually. Leave
+  changes staged or as working-tree diffs for the owner to review and
+  commit themselves.
 - Never commit customer standards, private system context, generated customer
   responses, credentials, model data, Chroma indexes, or identifying logs.
   Use the fictional `demo` engagement and sanitized test fixtures.

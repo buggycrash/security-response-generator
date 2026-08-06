@@ -250,6 +250,44 @@ def test_retrieve_for_chat_queries_all_three_collections_with_shared_embedding(m
     assert [c.chunk_id for c in result.private_chunks] == ["p1"]
 
 
+def test_retrieve_for_chat_embeds_the_terminology_expanded_query(monkeypatch):
+    captured: dict = {}
+
+    def _fake_embed_query(text):
+        captured["text"] = text
+        return [0.0]
+
+    monkeypatch.setattr(retrieval, "embed_query", _fake_embed_query)
+    collections = {
+        config.COLLECTION_CUSTOMER_STANDARDS: _FakeCollection(_flat_result([]), _raw_result([])),
+        config.COLLECTION_KNOWLEDGE_BASE: _FakeCollection(_flat_result([]), _raw_result([])),
+        config.COLLECTION_PRIVATE_CONTEXT: _FakeCollection(_flat_result([]), _raw_result([])),
+    }
+
+    retrieval.retrieve_for_chat("what is the password length requirement?", collections)
+
+    assert captured["text"] == "what is the password length requirement? authenticator"
+
+
+def test_retrieve_for_control_embeds_the_terminology_expanded_query(monkeypatch):
+    captured: dict = {}
+
+    def _fake_embed_query(text):
+        captured["text"] = text
+        return [0.0]
+
+    monkeypatch.setattr(retrieval, "embed_query", _fake_embed_query)
+    collections = {
+        config.COLLECTION_CUSTOMER_STANDARDS: _FakeCollection(_flat_result([]), _raw_result([])),
+        config.COLLECTION_KNOWLEDGE_BASE: _FakeCollection(_flat_result([]), _raw_result([])),
+        config.COLLECTION_PRIVATE_CONTEXT: _FakeCollection(_flat_result([]), _raw_result([])),
+    }
+
+    retrieval.retrieve_for_control("IA-5", "password policy notes", collections)
+
+    assert captured["text"] == "IA-5 password policy notes authenticator"
+
+
 def test_chat_retrieval_result_has_any_match():
     empty = retrieval.ChatRetrievalResult(customer_chunks=[], baseline_chunks=[], private_chunks=[])
     assert empty.has_any_match is False

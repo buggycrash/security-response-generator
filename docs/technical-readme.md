@@ -24,6 +24,14 @@ process). SRG pins Ollama connections to the local loopback interface,
 rejects cloud-tagged Ollama models before sending content, and disables
 Chroma product telemetry.
 
+Retrieval queries (both `generate`'s control/context text and `chat`'s
+freeform question) are also expanded with a small, static NIST-vocabulary
+synonym map (`generation/terminology.py`) before being embedded, so common
+terms analysts use informally (e.g. "password") still surface content that
+only uses the matching NIST umbrella term (e.g. "authenticator", IA-5). The
+system prompts additionally include the same terminology mapping so the
+generation model connects the two even when the wording differs.
+
 ## Features
 
 - Three-tier retrieval that respects customer/state standards as

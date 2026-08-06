@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(git commit:*)",
+      "Bash(git commit *)",
+      "Bash(git commit)",
+      "Bash(git commit-tree:*)",
+      "Bash(git commit-tree *)",
+      "Bash(*git*commit*)"
+    ]
+  }
+}

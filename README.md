@@ -12,7 +12,7 @@ its system satisfies security controls. That work often falls to an existing
 team member who understands the system but has little experience writing
 control responses.
 
-After an hour or two of initial setup, that team member can produce a draft
+After an hour or two of initial setup, that team member with SRG can produce a draft
 response in minutes. SRG maps the prose to the applicable NIST requirements *and* customer-specific parameters (password length, audit review frequency, etc.), using concrete system details supplied either in reusable private context files or with the individual request. The result is a faster drafting process with grounded requirement coverage. Additionally, SRG provides consistent tone and style over time regardless of which engineer requests the response generation, reducing cognitive load on both the writers, and the assessors.
 
 ---
@@ -24,10 +24,6 @@ Security Response Generator (`srg`) is a local CLI that drafts NIST SP
 - Customer-specific requirements, policy, and standards
 - Private system context
 - Any additional notes or context supplied with each request
-
-Embeddings and response generation run locally through Ollama. Generated
-responses are labeled with the active customer engagement so customer
-content and output are not easily confused.
 
 ## Prerequisites
 
@@ -59,11 +55,11 @@ one-time instruction it provides.
 
 ## Try the built-in demo
 
-The initial engagement is `DEMO`. It includes:
+The initial engagement is `DEMO` (see below for what an engagement is). It includes:
 
 - The project-level NIST SP 800-53 Release 5.2.0 catalog
 - Fictional private context for `DEMO-ECMS`
-- No customer-specific standards
+- Fictional, and sometimes intentionally outrageous, customer-specific standards
 
 Ingest the source material:
 
@@ -146,6 +142,7 @@ the ability to ask about the controls, and if available, the customer standards.
 srg chat "How often do we need to audit logins?"
 ```
 ![](docs/images/image8.png)
+Chatting with the default model can be hit or miss.  This was luckily a hit.  However it sometimes gets lost if there are multiple matching statements to your questions, and only returns the first one.  Use the Gemma4:E2B model if you can.  `SRG_GEN_MODEL=gemma4:e4b srg chat "..."`
 
 ## Common next steps
 
