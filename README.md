@@ -142,7 +142,10 @@ the ability to ask about the controls, and if available, the customer standards.
 srg chat "How often do we need to audit logins?"
 ```
 ![](docs/images/image8.png)
-Chatting with the default model can be hit or miss.  This was luckily a hit.  However it sometimes gets lost if there are multiple matching statements to your questions, and only returns the first one.  Use the Gemma4:E2B model if you can.  `SRG_GEN_MODEL=gemma4:e4b srg chat "..."`
+Chatting with the default model can be hit or miss due to the wide variety of information it needs to scan.  This was luckily a hit.  However it sometimes gets lost if there are multiple matching statements to the question, and only returns the first one.  
+Use the Gemma4:E2B model for chat if you can.  `SRG_GEN_MODEL=gemma4:e4b srg chat "..."`  
+
+**The default model does NOT display this "hit or miss" behavior when using `srg generate` since the control ID (AC-2 for example) grounds the model to specific sections of the documentation.  
 
 ## Common next steps
 

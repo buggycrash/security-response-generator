@@ -433,8 +433,7 @@ a substitute for context. In practical order:
 3. **Use a more capable generation model when hardware permits.** Better
    grounding still requires a model capable of following nuanced context and
    synthesizing a complex control. Gemma 4 E4B was more reliable than the
-   default model on some identical prompts, while Phi-4-mini was insufficient
-   for this workload. See
+   default model on some identical prompts. See
    [Choosing a generation model](#choosing-a-generation-model) and the
    [side-by-side model outputs](Examples-of-SRG-use.md) for the observed
    differences.
