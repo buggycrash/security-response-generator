@@ -603,6 +603,41 @@ manually — see the "Manual verification" section below.
 8. **Output**: the response is printed to stdout and optionally written to
    a file.
 
+### Why RAG instead of long-context stuffing
+
+An alternative architecture was considered: skip chunking/embedding/retrieval
+entirely and paste the full NIST catalog plus the engagement's complete
+customer-standards and private-context documents into every prompt. The math
+ruled it out.
+
+- The NIST SP 800-53 catalog (`knowledge_base/NIST.SP.800-53-oscal.md`) is
+  about 1.3 MB / 170,000 words — roughly 250,000–330,000 tokens using this
+  project's own chars-per-token convention (see the `NUM_CTX` comment in
+  `config.py`). That's already 2x larger than `llama3.1:8b`'s published
+  128,000-token context window on its own — it doesn't fit in a single
+  request, regardless of hardware.
+- Real customer-standards bodies aren't small either. The example/demo
+  fixtures in this repo are only a few thousand tokens, but a full
+  per-jurisdiction standards body for a real engagement can be substantially
+  larger, often larger than the NIST catalog itself.
+- Even a model that could accept that much context would need the VRAM for
+  it: `llama3.1:8b`'s KV cache runs about 128 KiB per token of context
+  (consistent with this project's documented ~7 GB VRAM footprint at the
+  current `NUM_CTX=16384`). Holding a few hundred thousand tokens of context
+  would need tens of GB of VRAM for KV cache alone, on top of model weights,
+  plus minutes of added prompt-processing latency per request.
+- Bigger context isn't free from an accuracy standpoint either: burying the
+  one relevant control's few-hundred-token section inside hundreds of
+  thousands of mostly irrelevant tokens is the "lost in the middle" failure
+  mode smaller dense models are particularly prone to — it would likely make
+  responses worse, not better.
+
+Retrieval keeps each request small (a bounded top-k slice per tier, sized in
+`config.py`) precisely because both source corpora — the shared NIST
+baseline, and for larger jurisdictions the customer-standards material
+itself — can each individually exceed what any locally-run model's context
+window can hold.
+
 ## File Structure
 
 ```
