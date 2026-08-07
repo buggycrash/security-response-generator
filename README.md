@@ -12,6 +12,8 @@ its system satisfies security controls. That work often falls to an existing
 team member who understands the system but has little experience writing
 control responses.
 
+![](docs/images/image10.png)
+
 After an hour or two of initial setup, that team member with SRG can produce a draft
 response in minutes. SRG maps the prose to the applicable NIST requirements *and* customer-specific parameters (password length, audit review frequency, etc.), using concrete system details supplied either in reusable private context files or with the individual request. The result is a faster drafting process with grounded requirement coverage. Additionally, SRG provides consistent tone and style over time regardless of which engineer requests the response generation, reducing cognitive load on both the writers, and the assessors.
 
