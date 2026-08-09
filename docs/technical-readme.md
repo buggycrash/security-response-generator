@@ -36,7 +36,7 @@ generation model connects the two even when the wording differs.
 
 - Three-tier retrieval that respects customer/state standards as
   authoritative when they exist, and explicitly flags when they don't.
-- Runs on U.S.-developed, open-weight models (Llama 3.1 8B by default; see
+- Runs on U.S.-developed, open-weight models (Gemma4:E4B-it-qat by default; see
   [Choosing a generation model](#choosing-a-generation-model)) rather than a
   closed-source or overseas API.
 - Refuses to answer (rather than hallucinate) if a control ID has no match
@@ -78,7 +78,7 @@ generation model connects the two even when the wording differs.
 - **Generation model**: [Gemma 4 E4B
   (QAT)](https://ollama.com/library/gemma4) via [Ollama](https://ollama.com)
   by default — the best output quality of any locally-viable option tested,
-  in a quantized footprint that fits comfortably in 12 GB of VRAM alongside
+  in a quantized footprint that fits comfortably in 8 GB of VRAM alongside
   the embedding model. It is swappable through `SRG_GEN_MODEL`; see
   [Choosing a generation model](#choosing-a-generation-model) for tested
   models and results.
@@ -96,7 +96,7 @@ generation model connects the two even when the wording differs.
   supported; WSL2 is supported. macOS may be compatible but has not yet been
   tested.
 - A modest amount of VRAM or unified memory for `gemma4:e4b-it-qat`
-  (approximately 6.1 GB to download and under 7 GB of VRAM once loaded
+  (approximately 6.1 GB to download and under 4 GB of VRAM once loaded
   alongside `embeddinggemma`) — it fits comfortably on an 8 GB card. See
   [Choosing a generation model](#choosing-a-generation-model) for other
   tested options. SRG does not currently have a recommended generation
@@ -169,16 +169,15 @@ controls it can still omit or misunderstand relevant context even when
 retrieval supplied the correct material. Every generated response is
 therefore a draft requiring human review.
 
-See [Examples of SRG model use](Examples-of-SRG-use.md) for side-by-side
-outputs from the default model, [models to be determined] using identical
-prompts. It also contains a table of all models tested and a short overview
-of their results.
+See [Examples of SRG model use](Examples-of-SRG-use.md) for the aforementioned table and side-by-side
+outputs from the default model and considered alternatives using identical
+prompts.
 
 `gemma4:e4b-it-qat` is a quantization-aware-trained (QAT) build of Google's
 Gemma 4 E4B, part of a multimodal model family that still carries unused
 vision/audio encoders this tool never exercises. QAT quantization is what
 brings its resident footprint down to well under 7 GB, letting it coexist
-with `embeddinggemma` on a 12 GB card without the evict-and-reload cycling
+with `embeddinggemma` on an 8 GB card without the evict-and-reload cycling
 that tighter-fitting models can trigger on every `srg generate` call. See
 "Responses are much slower than expected" in
 [Troubleshooting](#troubleshooting) for symptoms and mitigations.
