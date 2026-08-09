@@ -12,9 +12,9 @@ local model storage unless it is run with `./setup.sh --skip-models`. They
 then become runtime components used by the installed project, but they are
 not covered by this project's MIT License.
 
-- **Llama 3.1** is subject to the
-  [Llama 3.1 Community License](https://ollama.com/library/llama3.1%3A8b-text-q3_K_M/blobs/0ba8f0e314b4)
-  and its incorporated acceptable-use terms.
+- **Gemma 4 E4B (QAT)** is subject to the
+  [Gemma Terms of Use](https://ai.google.dev/gemma/terms), including its
+  incorporated prohibited-use policy.
 - **EmbeddingGemma** is subject to the
   [Gemma Terms of Use](https://ai.google.dev/gemma/terms), including its
   incorporated prohibited-use policy.

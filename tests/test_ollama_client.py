@@ -31,7 +31,7 @@ def test_local_client_is_pinned_to_loopback(monkeypatch):
 def test_embed_texts_calls_ollama_with_configured_model(monkeypatch):
     captured = {}
 
-    def fake_embed(model, input):
+    def fake_embed(model, input, keep_alive):
         captured["model"] = model
         captured["input"] = input
         return {"embeddings": [[0.1, 0.2], [0.3, 0.4]]}
@@ -49,7 +49,7 @@ def test_embed_texts_splits_large_input_into_batches(monkeypatch):
     monkeypatch.setattr(ollama_client, "EMBED_BATCH_SIZE", 2)
     calls = []
 
-    def fake_embed(model, input):
+    def fake_embed(model, input, keep_alive):
         calls.append(list(input))
         return {"embeddings": [[float(len(text))] for text in input]}
 
@@ -65,7 +65,7 @@ def test_embed_texts_single_batch_when_under_batch_size(monkeypatch):
     monkeypatch.setattr(ollama_client, "EMBED_BATCH_SIZE", 10)
     calls = []
 
-    def fake_embed(model, input):
+    def fake_embed(model, input, keep_alive):
         calls.append(list(input))
         return {"embeddings": [[0.0] for _ in input]}
 
@@ -79,7 +79,7 @@ def test_embed_texts_single_batch_when_under_batch_size(monkeypatch):
 def test_embed_texts_calls_on_batch_after_each_batch(monkeypatch):
     monkeypatch.setattr(ollama_client, "EMBED_BATCH_SIZE", 2)
 
-    def fake_embed(model, input):
+    def fake_embed(model, input, keep_alive):
         return {"embeddings": [[0.0] for _ in input]}
 
     monkeypatch.setattr(ollama_client._local_client(), "embed", fake_embed, raising=False)
@@ -94,7 +94,7 @@ def test_embed_texts_on_batch_not_required(monkeypatch):
     monkeypatch.setattr(
         ollama_client._local_client(),
         "embed",
-        lambda model, input: {"embeddings": [[0.0]]},
+        lambda model, input, keep_alive: {"embeddings": [[0.0]]},
         raising=False,
     )
 
@@ -111,11 +111,40 @@ def test_embed_texts_empty_input_short_circuits(monkeypatch):
     assert ollama_client.embed_texts([]) == []
 
 
+def test_embed_texts_passes_configured_keep_alive(monkeypatch):
+    captured = {}
+
+    def fake_embed(model, input, keep_alive):
+        captured["keep_alive"] = keep_alive
+        return {"embeddings": [[0.0]]}
+
+    monkeypatch.setattr(ollama_client._local_client(), "embed", fake_embed, raising=False)
+
+    ollama_client.embed_texts(["a"])
+
+    assert captured["keep_alive"] == ollama_client.EMBED_KEEP_ALIVE
+
+
+def test_embed_texts_keep_alive_respects_override(monkeypatch):
+    monkeypatch.setattr(ollama_client, "EMBED_KEEP_ALIVE", "30m")
+    captured = {}
+
+    def fake_embed(model, input, keep_alive):
+        captured["keep_alive"] = keep_alive
+        return {"embeddings": [[0.0]]}
+
+    monkeypatch.setattr(ollama_client._local_client(), "embed", fake_embed, raising=False)
+
+    ollama_client.embed_texts(["a"])
+
+    assert captured["keep_alive"] == "30m"
+
+
 def test_embed_query_returns_single_vector(monkeypatch):
     monkeypatch.setattr(
         ollama_client._local_client(),
         "embed",
-        lambda model, input: {"embeddings": [[1.0, 2.0]]},
+        lambda model, input, keep_alive: {"embeddings": [[1.0, 2.0]]},
         raising=False,
     )
 
@@ -146,7 +175,10 @@ def test_chat_messages_calls_ollama_with_configured_model_and_raw_messages(monke
     assert result == "response text"
     assert captured["model"] == ollama_client.GENERATION_MODEL
     assert captured["messages"] == messages
-    assert captured["options"] == {"num_ctx": ollama_client.NUM_CTX}
+    assert captured["options"] == {
+        "num_ctx": ollama_client.NUM_CTX,
+        "seed": ollama_client.GENERATION_SEED,
+    }
     assert captured["format"] is None
     assert captured["keep_alive"] == "20m"
 
@@ -178,7 +210,58 @@ def test_chat_messages_num_ctx_respects_override(monkeypatch):
 
     ollama_client.chat_messages([{"role": "user", "content": "hi"}])
 
-    assert captured["options"] == {"num_ctx": 32768}
+    assert captured["options"] == {"num_ctx": 32768, "seed": ollama_client.GENERATION_SEED}
+
+
+def test_chat_messages_temperature_omitted_by_default(monkeypatch):
+    captured = {}
+
+    def fake_chat(model, messages, options, format, keep_alive):
+        captured["options"] = options
+        return {"message": {"content": "response text"}}
+
+    monkeypatch.setattr(ollama_client._local_client(), "chat", fake_chat, raising=False)
+
+    ollama_client.chat_messages([{"role": "user", "content": "hi"}])
+
+    assert captured["options"] == {
+        "num_ctx": ollama_client.NUM_CTX,
+        "seed": ollama_client.GENERATION_SEED,
+    }
+
+
+def test_chat_messages_temperature_included_when_set(monkeypatch):
+    monkeypatch.setattr(ollama_client, "GENERATION_TEMPERATURE", 0.0)
+    captured = {}
+
+    def fake_chat(model, messages, options, format, keep_alive):
+        captured["options"] = options
+        return {"message": {"content": "response text"}}
+
+    monkeypatch.setattr(ollama_client._local_client(), "chat", fake_chat, raising=False)
+
+    ollama_client.chat_messages([{"role": "user", "content": "hi"}])
+
+    assert captured["options"] == {
+        "num_ctx": ollama_client.NUM_CTX,
+        "seed": ollama_client.GENERATION_SEED,
+        "temperature": 0.0,
+    }
+
+
+def test_chat_messages_seed_respects_override(monkeypatch):
+    monkeypatch.setattr(ollama_client, "GENERATION_SEED", 7)
+    captured = {}
+
+    def fake_chat(model, messages, options, format, keep_alive):
+        captured["options"] = options
+        return {"message": {"content": "response text"}}
+
+    monkeypatch.setattr(ollama_client._local_client(), "chat", fake_chat, raising=False)
+
+    ollama_client.chat_messages([{"role": "user", "content": "hi"}])
+
+    assert captured["options"] == {"num_ctx": ollama_client.NUM_CTX, "seed": 7}
 
 
 def test_chat_messages_keep_alive_respects_override(monkeypatch):
@@ -194,6 +277,30 @@ def test_chat_messages_keep_alive_respects_override(monkeypatch):
     ollama_client.chat_messages([{"role": "user", "content": "hi"}])
 
     assert captured["keep_alive"] == "30m"
+
+
+def test_chat_messages_logs_raw_reply_when_debug_enabled(monkeypatch, capsys):
+    monkeypatch.setattr(ollama_client, "DEBUG_RAW_REPLY", True)
+
+    def fake_chat(model, messages, options, format, keep_alive):
+        return {"message": {"content": "response text"}}
+
+    monkeypatch.setattr(ollama_client._local_client(), "chat", fake_chat, raising=False)
+
+    ollama_client.chat_messages([{"role": "user", "content": "hi"}])
+
+    assert "response text" in capsys.readouterr().err
+
+
+def test_chat_messages_silent_by_default(monkeypatch, capsys):
+    def fake_chat(model, messages, options, format, keep_alive):
+        return {"message": {"content": "response text"}}
+
+    monkeypatch.setattr(ollama_client._local_client(), "chat", fake_chat, raising=False)
+
+    ollama_client.chat_messages([{"role": "user", "content": "hi"}])
+
+    assert capsys.readouterr().err == ""
 
 
 @pytest.mark.parametrize("model", ["gpt-oss:cloud", "gpt-oss:120b-cloud"])

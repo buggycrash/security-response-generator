@@ -246,7 +246,7 @@ else
       WARNING: Model weights are not included in SRG or covered by its MIT License.
       Setup downloads separately licensed runtime components into Ollama.
       Default model terms:
-        Llama 3.1: https://ollama.com/library/llama3.1:8b-text-q3_K_M/blobs/0ba8f0e314b4
+        Gemma 4 E4B (QAT): https://ai.google.dev/gemma/terms
         EmbeddingGemma: https://ai.google.dev/gemma/terms
 EOF
   printf '      Configured generation model: %s\n' "$GEN_MODEL"

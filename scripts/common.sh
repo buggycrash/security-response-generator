@@ -3,7 +3,7 @@
 # Shared runtime checks for setup.sh and the project-local srg launcher.
 
 # shellcheck disable=SC2034 # These defaults are consumed by scripts that source this file.
-SRG_DEFAULT_GEN_MODEL="llama3.1:8b"
+SRG_DEFAULT_GEN_MODEL="gemma4:e4b-it-qat"
 SRG_DEFAULT_EMBED_MODEL="embeddinggemma"
 
 # Keep every Ollama CLI call on loopback and disable Ollama cloud features

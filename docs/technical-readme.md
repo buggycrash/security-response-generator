@@ -75,10 +75,11 @@ generation model connects the two even when the wording differs.
 ## Technology Stack
 
 - **Language**: Python
-- **Generation model**: [Llama 3.1 8B](https://ollama.com/library/llama3.1)
-  via [Ollama](https://ollama.com) by default — a practical, dense,
-  text-only model that fits comfortably in 12 GB of VRAM alongside the
-  embedding model. It is swappable through `SRG_GEN_MODEL`; see
+- **Generation model**: [Gemma 4 E4B
+  (QAT)](https://ollama.com/library/gemma4) via [Ollama](https://ollama.com)
+  by default — the best output quality of any locally-viable option tested,
+  in a quantized footprint that fits comfortably in 12 GB of VRAM alongside
+  the embedding model. It is swappable through `SRG_GEN_MODEL`; see
   [Choosing a generation model](#choosing-a-generation-model) for tested
   models and results.
 - **Embedding model**: EmbeddingGemma via Ollama
@@ -94,12 +95,12 @@ generation model connects the two even when the wording differs.
 - Ubuntu 22.04 is the only tested operating system. Native Windows is not
   supported; WSL2 is supported. macOS may be compatible but has not yet been
   tested.
-- A modest amount of VRAM or unified memory for `llama3.1:8b` (approximately
-  4.9 GB to download and 7 GB of VRAM once loaded alongside
-  `embeddinggemma`) — it fits comfortably on a 12 GB card. See
-  [Choosing a generation model](#choosing-a-generation-model) for a more
-  capable option if you have additional VRAM. SRG does not currently have a
-  recommended generation model smaller than `llama3.1:8b`.
+- A modest amount of VRAM or unified memory for `gemma4:e4b-it-qat`
+  (approximately 6.1 GB to download and under 7 GB of VRAM once loaded
+  alongside `embeddinggemma`) — it fits comfortably on an 8 GB card. See
+  [Choosing a generation model](#choosing-a-generation-model) for other
+  tested options. SRG does not currently have a recommended generation
+  model smaller than `gemma4:e4b-it-qat`.
 
 ## Installation
 
@@ -111,9 +112,9 @@ cd security-response-generator
 ```
 
 This creates a `.venv`, installs the package, starts Ollama when needed,
-pulls both models (`llama3.1:8b` and `embeddinggemma`), and installs a small
-launcher at `~/.local/bin/srg`. The launcher invokes the project virtual
-environment directly, so it does not need to be activated.
+pulls both models (`gemma4:e4b-it-qat` and `embeddinggemma`), and installs a
+small launcher at `~/.local/bin/srg`. The launcher invokes the project
+virtual environment directly, so it does not need to be activated.
 
 A built-in `demo` engagement is active initially. It uses the included
 NIST SP 800-53 Release 5.2.0 catalog, fictional private system context, and
@@ -155,30 +156,31 @@ demo data while preserving the committed fictional demo seed files.
 > Model weights are not included in this source repository and are not
 > covered by its MIT License. Running `./setup.sh` without `--skip-models`
 > downloads them into Ollama's local model storage, where they become
-> separately licensed runtime components of the installed project. The
-> default generation model is governed by the
-> [Llama 3.1 Community License](https://ollama.com/library/llama3.1%3A8b-text-q3_K_M/blobs/0ba8f0e314b4);
-> the default embedding model is governed by the
-> [Gemma Terms of Use](https://ai.google.dev/gemma/terms).
+> separately licensed runtime components of the installed project. Both the
+> default generation model and the default embedding model are governed by
+> the [Gemma Terms of Use](https://ai.google.dev/gemma/terms).
 
-The default, `llama3.1:8b`, was selected after direct comparisons on SRG's
-retrieval and generation workload. It provides a practical balance between
-response quality, speed, and hardware requirements, but it remains an 8B
-model: on complex controls it can omit or misunderstand relevant context
-even when retrieval supplied the correct material. Every generated response
-is therefore a draft requiring human review.
+The default, `gemma4:e4b-it-qat`, was selected after direct comparisons on
+SRG's retrieval and generation workload against every other model in the
+table below — it produced the best output quality and alignment of any
+locally-viable option tested, in a quantized footprint that fits comfortably
+alongside `embeddinggemma`. It remains a compromise, though: on complex
+controls it can still omit or misunderstand relevant context even when
+retrieval supplied the correct material. Every generated response is
+therefore a draft requiring human review.
 
 See [Examples of SRG model use](Examples-of-SRG-use.md) for side-by-side
-outputs from the default model and Gemma 4 E4B using identical prompts. The
-examples illustrate both outcomes: some prompts are handled similarly by
-both models, while more capable models can follow nuanced analyst context
-more reliably.
+outputs from the default model, [models to be determined] using identical
+prompts. It also contains a table of all models tested and a short overview
+of their results.
 
-`llama3.1:8b` is a dense, text-only model with no unused vision or audio
-encoders to load. Its approximately 7 GB resident footprint (Q4_K_M)
-coexists comfortably with `embeddinggemma` on a 12 GB card without the
-evict-and-reload cycling that tighter-fitting models can trigger on every
-`srg generate` call. See "Responses are much slower than expected" in
+`gemma4:e4b-it-qat` is a quantization-aware-trained (QAT) build of Google's
+Gemma 4 E4B, part of a multimodal model family that still carries unused
+vision/audio encoders this tool never exercises. QAT quantization is what
+brings its resident footprint down to well under 7 GB, letting it coexist
+with `embeddinggemma` on a 12 GB card without the evict-and-reload cycling
+that tighter-fitting models can trigger on every `srg generate` call. See
+"Responses are much slower than expected" in
 [Troubleshooting](#troubleshooting) for symptoms and mitigations.
 
 **[Phi-4-mini](https://ollama.com/library/phi4-mini)** (Microsoft) was tested
@@ -188,38 +190,55 @@ generation workload and should not be used for control responses. Across
 repeated identical prompts, it produced inconsistent output, omitted explicit
 analyst context, drifted from the requested control, and generated validation
 suggestions unrelated to its claims. Those are model-capability failures, not
-retrieval failures. `llama3.1:8b` is the minimum recommended local generation
-model; if your hardware cannot run it, SRG does not currently offer a suitable
-smaller fallback. The linked
-[model-output examples](Examples-of-SRG-use.md#phi4-mini-is-weak-and-inconsistent)
-show the observed Phi-4-mini failures.
+retrieval failures. `gemma4:e4b-it-qat` is the minimum recommended local
+generation model; if your hardware cannot run it, SRG does not currently
+offer a suitable smaller fallback.
 
-If you have significantly more VRAM available (roughly 16 GB or more),
-**[Gemma 4 E4B](https://ollama.com/library/gemma4)** (Google) is also an
-option. It is larger and can follow nuanced context more reliably, but it is
-multimodal and bundles vision/audio encoders this tool never uses. That adds
-load-time overhead and made it prone to VRAM-eviction cycling on a 12 GB card
-in testing because its footprint sits at the edge of what's available
-alongside `embeddinggemma`.
+The plain **[Gemma 4 E4B](https://ollama.com/library/gemma4)** (non-QAT) tag
+was also tested and produced very good alignment and prose — but at roughly
+9.6 GB, its footprint sits at the edge of what's available on a 12 GB card
+alongside `embeddinggemma`, making it prone to VRAM-eviction cycling in
+testing. The QAT build now used as the default achieves essentially the same
+quality for meaningfully less VRAM, so the plain tag isn't recommended over
+it; it's only worth considering if you have significantly more VRAM
+available (roughly 16 GB or more) and want to rule out any possible
+QAT-related quality difference yourself.
 
 Switch models with the `SRG_GEN_MODEL` environment variable — no code
 changes needed, since `srg` talks to Ollama's generic chat API regardless
 of which model is behind it:
 
 ```bash
-ollama pull gemma4:e4b
-SRG_GEN_MODEL=gemma4:e4b srg generate SI-5 --context "..."
+ollama pull llama3.1:8b
+SRG_GEN_MODEL=llama3.1:8b srg generate SI-5 --context "..."
 ```
 
 To make a switch permanent for your own sessions, export `SRG_GEN_MODEL` in
 your shell profile.
 
 After each generation request, SRG asks Ollama to keep the generation model
-loaded for 20 minutes to make subsequent runs faster. Override that duration
-with `SRG_GEN_KEEP_ALIVE` using an Ollama duration such as `30m` or `1h`:
+loaded for 20 minutes to make subsequent runs faster. `embeddinggemma` is
+kept loaded for that same duration by default, since it's invoked on every
+`generate` and `chat` call for retrieval and has its own non-trivial load
+time. Override either duration independently with `SRG_GEN_KEEP_ALIVE` and
+`SRG_EMBED_KEEP_ALIVE`, using an Ollama duration such as `30m` or `1h`:
 
 ```bash
 SRG_GEN_KEEP_ALIVE=30m srg generate SI-5
+SRG_EMBED_KEEP_ALIVE=30m srg generate SI-5
+```
+
+Generation requests use a fixed `seed` of `42` by default for reproducible
+output across runs; override it with `SRG_GEN_SEED` if you want varied
+output. `temperature` is left unset by default, so the generation model's
+own Modelfile default applies, or Ollama's if the model does not provide. Some models show wild output variance at non-default
+temperatures, so this stays opt-in via `SRG_GEN_TEMPERATURE` rather than
+being forced. Note that seed alone doesn't guarantee identical output
+run-to-run, since floating-point variance in the model runner can still
+shift results:
+
+```bash
+SRG_GEN_TEMPERATURE=0 SRG_GEN_SEED=7 srg generate SI-5
 ```
 
 The interactive follow-up-question feature (see
@@ -574,7 +593,7 @@ manually — see the "Manual verification" section below.
    Analyst-provided `--context` facts are placed in the system message so
    they receive the same priority as the editable instructions. The assembled
    messages are then sent through Ollama to the generation model
-   (`llama3.1:8b` by default; see
+   (`gemma4:e4b-it-qat` by default; see
    [Choosing a generation model](#choosing-a-generation-model)).
    `instructions.md` is read fresh for every `srg generate` invocation, so
    edits apply immediately without re-ingesting documents or restarting SRG.
@@ -684,12 +703,8 @@ security-response-generator/
   malformed control ID) before generating anything — see
   [Bulk-generate from a CSV](#bulk-generate-from-a-csv) for the exact
   validation rules.
-- **Model pull is slow/fails**: `llama3.1:8b` is an approximately 4.9 GB
-  download (see
-  [Choosing a generation model](#choosing-a-generation-model) for model
-  requirements and the larger Gemma option); check disk space and network
-  connectivity. Phi-4-mini is smaller but is not sufficiently reliable for
-  this workload.
+- **Model pull is slow/fails**: check disk space and network
+  connectivity.  Ollama parallelizes model pulls, which quickly runs afoul of default network settings in WSL2 and Windows.
 - **Responses are much slower than expected**: run `ollama ps` to check
   whether the model is fully on GPU or partially spilled to system RAM/CPU
   (Ollama does this automatically and silently if VRAM is tight, and it's a

@@ -81,6 +81,13 @@ FOLLOWUP_INSTRUCTION = (
     "the system instructions."
 )
 
+BLANK_RESPONSE_RETRY_INSTRUCTION = (
+    'Your previous reply set "needs_info" to false but left "response" '
+    "empty. Write the full control heading and implementation prose now in "
+    '"response" -- it must not be blank. Follow all content and structure '
+    "rules from the system instructions."
+)
+
 FORCED_COMPLETION_INSTRUCTION = (
     "You have reached the limit of follow-up questions for this session. Do not ask "
     'any further questions -- set "needs_info" to false and write your final '

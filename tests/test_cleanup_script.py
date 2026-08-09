@@ -31,7 +31,7 @@ def make_cleanup_project(tmp_path: Path):
         'case "${1:-}" in\n'
         "  list)\n"
         "    printf 'NAME ID SIZE MODIFIED\\n'\n"
-        "    printf 'llama3.1:8b abc 1GB now\\n'\n"
+        "    printf 'gemma4:e4b-it-qat abc 1GB now\\n'\n"
         "    printf 'embeddinggemma:latest def 1GB now\\n'\n"
         "    ;;\n"
         "  rm)\n"
@@ -89,7 +89,7 @@ def test_cleanup_removes_owned_launcher_and_configured_models(tmp_path):
     assert result.returncode == 0, result.stderr
     assert not (install_dir / "srg").exists()
     assert ollama_log.read_text(encoding="utf-8").splitlines() == [
-        "llama3.1:8b",
+        "gemma4:e4b-it-qat",
         "embeddinggemma",
     ]
     assert "Cleanup complete" in result.stdout

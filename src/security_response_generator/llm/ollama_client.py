@@ -1,14 +1,19 @@
 """Thin wrapper around the local Ollama client for embeddings and chat."""
 
+import sys
 from collections.abc import Callable
 
 import ollama
 
 from security_response_generator.config import (
+    DEBUG_RAW_REPLY,
     EMBED_BATCH_SIZE,
+    EMBED_KEEP_ALIVE,
     EMBEDDING_MODEL,
     GENERATION_KEEP_ALIVE,
     GENERATION_MODEL,
+    GENERATION_SEED,
+    GENERATION_TEMPERATURE,
     NUM_CTX,
 )
 
@@ -45,7 +50,7 @@ def embed_texts(
     embeddings: list[list[float]] = []
     for start in range(0, len(texts), EMBED_BATCH_SIZE):
         batch = texts[start : start + EMBED_BATCH_SIZE]
-        response = client.embed(model=EMBEDDING_MODEL, input=batch)
+        response = client.embed(model=EMBEDDING_MODEL, input=batch, keep_alive=EMBED_KEEP_ALIVE)
         embeddings.extend(response["embeddings"])
         if on_batch is not None:
             on_batch(len(batch))
@@ -58,11 +63,17 @@ def embed_query(text: str) -> list[float]:
 
 def chat_messages(messages: list[dict], response_format: dict | None = None) -> str:
     _require_local_model(GENERATION_MODEL)
+    options: dict = {"num_ctx": NUM_CTX, "seed": GENERATION_SEED}
+    if GENERATION_TEMPERATURE is not None:
+        options["temperature"] = GENERATION_TEMPERATURE
     response = _local_client().chat(
         model=GENERATION_MODEL,
         messages=messages,
-        options={"num_ctx": NUM_CTX},
+        options=options,
         format=response_format,
         keep_alive=GENERATION_KEEP_ALIVE,
     )
-    return response["message"]["content"]
+    content = response["message"]["content"]
+    if DEBUG_RAW_REPLY:
+        print(f"[SRG debug] raw model reply:\n{content}\n", file=sys.stderr)
+    return content
