@@ -5,9 +5,15 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-GENERATION_MODEL = os.environ.get("SRG_GEN_MODEL", "llama3.1:8b")
+GENERATION_MODEL = os.environ.get("SRG_GEN_MODEL", "gemma4:e4b-it-qat")
 EMBEDDING_MODEL = os.environ.get("SRG_EMBED_MODEL", "embeddinggemma")
 GENERATION_KEEP_ALIVE = os.environ.get("SRG_GEN_KEEP_ALIVE", "20m")
+
+# Defaults to the same duration as GENERATION_KEEP_ALIVE, since
+# embeddinggemma is invoked on every generate/chat call just like the
+# generation model and has its own non-trivial load time. Override
+# independently with SRG_EMBED_KEEP_ALIVE if the two should diverge.
+EMBED_KEEP_ALIVE = os.environ.get("SRG_EMBED_KEEP_ALIVE", GENERATION_KEEP_ALIVE)
 
 # A large source document (e.g. the full NIST 800-53 catalog) can
 # chunk into hundreds of pieces. Sending them all to Ollama in a single
@@ -61,6 +67,21 @@ MAX_BULK_CONTROLS = int(os.environ.get("SRG_MAX_BULK_CONTROLS", "25"))
 # retrieved grounding material entirely. 16384 gives comfortable headroom
 # for the default top-k settings above plus response generation.
 NUM_CTX = int(os.environ.get("SRG_NUM_CTX", "16384"))
+
+# Left unset by default so the generation model's own Modelfile default
+# applies -- some models show high output variance under low temperature,
+# so this stays strictly opt-in.
+_gen_temperature = os.environ.get("SRG_GEN_TEMPERATURE")
+GENERATION_TEMPERATURE = float(_gen_temperature) if _gen_temperature is not None else None
+
+# Defaults to a fixed seed so generation is reproducible out of the box;
+# override with SRG_GEN_SEED for varied output across runs.
+GENERATION_SEED = int(os.environ.get("SRG_GEN_SEED", "42"))
+
+# Off by default; sending raw model replies to stderr is meant for one-off
+# debugging when a model produces unexpected output (blank/garbled replies,
+# schema-satisfying-but-empty fields, etc.), not routine use.
+DEBUG_RAW_REPLY = bool(os.environ.get("SRG_DEBUG_RAW_REPLY"))
 
 CONTROL_ID_PATTERN = r"[A-Z]{2}-\d+(?:\(\d+\))?"
 

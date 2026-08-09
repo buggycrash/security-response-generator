@@ -445,6 +445,47 @@ def test_run_conversation_forces_completion_when_budget_exhausted(monkeypatch):
     assert prompt_call_count["value"] == 2
 
 
+def test_render_final_reply_shows_placeholder_for_blank_response():
+    raw = _final_reply("")
+
+    result = cli._render_final_reply(raw, cli.OutputFormat.markdown)
+
+    assert cli.BLANK_RESPONSE_PLACEHOLDER in result
+    assert "needs_info" not in result
+
+
+def test_run_conversation_tracked_retries_once_on_blank_response(monkeypatch):
+    replies = iter([_final_reply(""), _final_reply("actual content")])
+    calls = []
+
+    def fake_chat_messages(messages, response_format=None):
+        calls.append(list(messages))
+        return next(replies)
+
+    monkeypatch.setattr(cli, "chat_messages", fake_chat_messages)
+
+    outcome = cli._run_conversation_tracked(_prompt())
+
+    assert outcome.text == _rendered_reply("actual content")
+    assert len(calls) == 2
+    assert calls[1][-1] == {"role": "user", "content": cli.BLANK_RESPONSE_RETRY_INSTRUCTION}
+
+
+def test_run_conversation_tracked_gives_up_after_one_blank_retry(monkeypatch):
+    calls = []
+
+    def fake_chat_messages(messages, response_format=None):
+        calls.append(list(messages))
+        return _final_reply("")
+
+    monkeypatch.setattr(cli, "chat_messages", fake_chat_messages)
+
+    outcome = cli._run_conversation_tracked(_prompt())
+
+    assert len(calls) == 2
+    assert cli.BLANK_RESPONSE_PLACEHOLDER in outcome.text
+
+
 def test_run_conversation_tracked_reports_no_forced_completion_on_first_try(monkeypatch):
     monkeypatch.setattr(
         cli, "chat_messages", lambda messages, response_format=None: _final_reply("body")

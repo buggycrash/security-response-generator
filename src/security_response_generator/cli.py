@@ -14,6 +14,7 @@ from security_response_generator import config, engagements
 from security_response_generator.generation import bulk_csv
 from security_response_generator.generation.formatting import normalize_to_ascii
 from security_response_generator.generation.prompt import (
+    BLANK_RESPONSE_RETRY_INSTRUCTION,
     FORCED_COMPLETION_INSTRUCTION,
     RESPONSE_SCHEMA,
     AssembledPrompt,
@@ -573,9 +574,19 @@ def _wait_for_model(messages: list[dict], label: str = "Thinking...") -> str:
         return chat_messages(messages, response_format=RESPONSE_SCHEMA)
 
 
+BLANK_RESPONSE_PLACEHOLDER = (
+    "[The model returned an empty response. Try again, or set SRG_GEN_MODEL "
+    "to a different generation model.]"
+)
+
+
+def _is_blank_response(response: str | None) -> bool:
+    return response is None or not response.strip()
+
+
 def _render_final_reply(raw_reply: str, output_format: OutputFormat) -> str:
     reply = parse_model_reply(raw_reply)
-    response = reply.response or raw_reply
+    response = BLANK_RESPONSE_PLACEHOLDER if _is_blank_response(reply.response) else reply.response
     response = _INLINE_VALIDATIONS_RE.sub("", response).rstrip()
     validations = reply.validations or ["[PLACEHOLDER: no screenshot validations were generated.]"]
     if output_format == OutputFormat.markdown:
@@ -612,11 +623,17 @@ def _run_conversation_tracked(
         {"role": "user", "content": prompt.user},
     ]
     followups_remaining = config.MAX_FOLLOWUP_TURNS if max_followups is None else max_followups
+    blank_retry_available = True
 
     while True:
         raw_reply = _wait_for_model(messages)
         reply = parse_model_reply(raw_reply)
         if not reply.needs_info:
+            if _is_blank_response(reply.response) and blank_retry_available:
+                blank_retry_available = False
+                messages.append({"role": "assistant", "content": raw_reply})
+                messages.append({"role": "user", "content": BLANK_RESPONSE_RETRY_INSTRUCTION})
+                continue
             return ConversationOutcome(_render_final_reply(raw_reply, output_format), False)
 
         messages.append({"role": "assistant", "content": raw_reply})
