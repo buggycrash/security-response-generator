@@ -32,6 +32,7 @@ def make_cleanup_project(tmp_path: Path):
         "  list)\n"
         "    printf 'NAME ID SIZE MODIFIED\\n'\n"
         "    printf 'gemma4:e4b-it-qat abc 1GB now\\n'\n"
+        "    printf 'gemma4:e2b-it-qat ghi 1GB now\\n'\n"
         "    printf 'embeddinggemma:latest def 1GB now\\n'\n"
         "    ;;\n"
         "  rm)\n"
@@ -90,6 +91,7 @@ def test_cleanup_removes_owned_launcher_and_configured_models(tmp_path):
     assert not (install_dir / "srg").exists()
     assert ollama_log.read_text(encoding="utf-8").splitlines() == [
         "gemma4:e4b-it-qat",
+        "gemma4:e2b-it-qat",
         "embeddinggemma",
     ]
     assert "Cleanup complete" in result.stdout

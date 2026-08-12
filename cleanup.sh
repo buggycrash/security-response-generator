@@ -7,6 +7,7 @@ source "$PROJECT_ROOT/scripts/common.sh"
 
 INSTALL_DIR="${SRG_INSTALL_DIR:-$HOME/.local/bin}"
 GEN_MODEL="${SRG_GEN_MODEL:-$SRG_DEFAULT_GEN_MODEL}"
+REVIEW_MODEL="${SRG_REVIEW_MODEL:-$SRG_DEFAULT_REVIEW_MODEL}"
 EMBED_MODEL="${SRG_EMBED_MODEL:-$SRG_DEFAULT_EMBED_MODEL}"
 KEEP_MODELS=0
 WIPE_ENGAGEMENTS=0
@@ -21,11 +22,13 @@ Options:
   --keep-models         Leave the configured Ollama models installed
   --wipe-engagements    Also permanently delete local engagement data
   --model MODEL         Remove this generation model instead of $SRG_DEFAULT_GEN_MODEL
+  --review-model MODEL  Remove this reviewer model instead of $SRG_DEFAULT_REVIEW_MODEL
   --install-dir DIR     Look for the srg launcher here (default: ~/.local/bin)
   -h, --help            Show this help
 
 Environment:
   SRG_GEN_MODEL         Generation model (default: $SRG_DEFAULT_GEN_MODEL)
+  SRG_REVIEW_MODEL      Reviewer model (default: $SRG_DEFAULT_REVIEW_MODEL)
   SRG_EMBED_MODEL       Embedding model (default: $SRG_DEFAULT_EMBED_MODEL)
   SRG_INSTALL_DIR       Launcher directory (default: ~/.local/bin)
 
@@ -42,6 +45,11 @@ while [ "$#" -gt 0 ]; do
     --model)
       [ "$#" -ge 2 ] || { srg_error "--model requires a value"; exit 2; }
       GEN_MODEL="$2"
+      shift
+      ;;
+    --review-model)
+      [ "$#" -ge 2 ] || { srg_error "--review-model requires a value"; exit 2; }
+      REVIEW_MODEL="$2"
       shift
       ;;
     --install-dir)
@@ -85,6 +93,7 @@ else
 
 Configured Ollama models to remove:
   $GEN_MODEL
+  $REVIEW_MODEL
   $EMBED_MODEL
 
 WARNING: Ollama models are shared across local applications. setup.sh did not
@@ -141,7 +150,7 @@ if [ "$KEEP_MODELS" -eq 0 ]; then
     CLEANUP_FAILURES=$((CLEANUP_FAILURES + 1))
   else
     previous_model=""
-    for model in "$GEN_MODEL" "$EMBED_MODEL"; do
+    for model in "$GEN_MODEL" "$REVIEW_MODEL" "$EMBED_MODEL"; do
       if [ "$model" = "$previous_model" ]; then
         continue
       fi

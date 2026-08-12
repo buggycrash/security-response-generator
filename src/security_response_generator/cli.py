@@ -24,6 +24,12 @@ from security_response_generator.generation.prompt import (
     parse_model_reply,
 )
 from security_response_generator.generation.retrieval import retrieve_for_chat, retrieve_for_control
+from security_response_generator.generation.review import (
+    REVIEW_SCHEMA,
+    assemble_review_messages,
+    parse_critique,
+    revision_instruction,
+)
 from security_response_generator.ingest import loaders, nist_oscal
 from security_response_generator.ingest import manifest as manifest_module
 from security_response_generator.ingest.chunking import chunk_text
@@ -33,7 +39,7 @@ from security_response_generator.ingest.store import (
     get_collection,
     upsert_chunks,
 )
-from security_response_generator.llm.ollama_client import chat_messages
+from security_response_generator.llm.ollama_client import chat_messages, review_messages
 
 _SYSTEMIC_ERRORS = (ConnectionError, ollama.ResponseError, ValueError, OSError)
 
@@ -279,6 +285,7 @@ def _generate_control_response(
     engagement: engagements.Engagement,
     output_format: OutputFormat,
     max_followups: int | None,
+    review: bool,
 ) -> ControlGenerationResult:
     """Run retrieval + generation for one control. Reused by `generate` (which
     treats a missing baseline match as fatal) and `bulk-generate` (which
@@ -300,14 +307,26 @@ def _generate_control_response(
         instructions=instructions,
         control_id=control_id,
         context_notes=context,
-        customer_chunks=result.customer_chunks,
+        customer_chunks=result.customer_chunks if result.has_customer_match else [],
         baseline_chunks=result.baseline_chunks,
         private_chunks=result.private_chunks,
         output_format=output_format,
     )
 
-    outcome = _run_conversation_tracked(prompt, output_format, max_followups)
-    labeled = _label_response(outcome.text, engagement, output_format)
+    outcome = _run_conversation_tracked(prompt, output_format, max_followups, review=review)
+    response_text = outcome.text
+    if not result.has_customer_match:
+        # The generator is never asked to determine or state this itself (small
+        # local models handled it unreliably both ways -- sometimes omitting the
+        # caveat when no standard existed, sometimes claiming one was missing when
+        # it wasn't) -- SRG already knows this deterministically from retrieval,
+        # so it prepends the caveat here instead.
+        caveat = (
+            f"[No customer- or state-specific standard was located for {control_id}; "
+            "this response is based on the NIST 800-53 baseline alone.]"
+        )
+        response_text = f"{caveat}\n\n{response_text}"
+    labeled = _label_response(response_text, engagement, output_format)
     return ControlGenerationResult(labeled, True, outcome.forced_completion)
 
 
@@ -328,13 +347,24 @@ def generate(
     output: Path = typer.Option(
         None, "-o", "--output", help="Also write the response to this file or directory."
     ),
+    review: bool = typer.Option(
+        False,
+        "--review",
+        help="Run two local reviewer critiques and generator revisions before output.",
+    ),
 ) -> None:
     """Generate a security control response grounded in the local knowledge base."""
     engagement = _active_engagement_or_exit()
     collections = _build_collections(engagement)
 
     result = _generate_control_response(
-        control_id, context, collections, engagement, output_format, max_followups=None
+        control_id,
+        context,
+        collections,
+        engagement,
+        output_format,
+        max_followups=None,
+        review=review,
     )
     if not result.has_baseline_match:
         typer.echo(
@@ -425,8 +455,9 @@ def bulk_generate(
 
     Up to config.MAX_BULK_CONTROLS rows per file. No follow-up questions are ever
     asked; a control that would have needed one gets a best-effort response with
-    an inline note instead. A problem specific to one control (unknown control ID,
-    a suppressed question) is written into that control's own file; a problem
+    an inline note instead. Every completed draft receives two local review and
+    revision passes. A problem specific to one control (unknown control ID, a
+    suppressed question) is written into that control's own file; a problem
     affecting every remaining row (Ollama unreachable, knowledge base not
     ingested) aborts the whole run immediately, leaving already-written files in
     place.
@@ -468,6 +499,7 @@ def bulk_generate(
                 engagement,
                 output_format,
                 max_followups=0,
+                review=True,
             )
             target = (
                 output_dir / f"{engagement.slug}_{row.control_id}_{date.today():%Y%m%d}.{extension}"
@@ -574,6 +606,30 @@ def _wait_for_model(messages: list[dict], label: str = "Thinking...") -> str:
         return chat_messages(messages, response_format=RESPONSE_SCHEMA)
 
 
+def _review_and_revise(prompt: AssembledPrompt, messages: list[dict], draft: str) -> str:
+    """Run two reviewer critiques, each followed by a generator revision."""
+    candidate = draft
+    for pass_number in (1, 2):
+        with console.status(f"Reviewing draft ({pass_number}/2)..."):
+            raw_critique = review_messages(
+                assemble_review_messages(prompt, candidate, messages),
+                response_format=REVIEW_SCHEMA,
+            )
+        critique = parse_critique(raw_critique)
+        messages.append({"role": "assistant", "content": candidate})
+        messages.append(
+            {
+                "role": "user",
+                "content": revision_instruction(critique, final=pass_number == 2),
+            }
+        )
+        candidate = _wait_for_model(
+            messages,
+            "Finalizing..." if pass_number == 2 else "Revising draft...",
+        )
+    return candidate
+
+
 BLANK_RESPONSE_PLACEHOLDER = (
     "[The model returned an empty response. Try again, or set SRG_GEN_MODEL "
     "to a different generation model.]"
@@ -606,6 +662,8 @@ def _run_conversation_tracked(
     prompt: AssembledPrompt,
     output_format: OutputFormat = OutputFormat.markdown,
     max_followups: int | None = None,
+    *,
+    review: bool = False,
 ) -> ConversationOutcome:
     """Run the generation call, handling up to max_followups (or
     config.MAX_FOLLOWUP_TURNS if not given) interactive clarifying questions
@@ -617,6 +675,8 @@ def _run_conversation_tracked(
     placeholders for whatever couldn't be addressed). Passing
     max_followups=0 makes this fully noninteractive: the first needs_info
     reply immediately triggers forced completion without ever prompting.
+    When review is true, the completed draft receives two review/revision
+    passes after all question handling is finished.
     """
     messages = [
         {"role": "system", "content": prompt.system},
@@ -634,14 +694,16 @@ def _run_conversation_tracked(
                 messages.append({"role": "assistant", "content": raw_reply})
                 messages.append({"role": "user", "content": BLANK_RESPONSE_RETRY_INSTRUCTION})
                 continue
-            return ConversationOutcome(_render_final_reply(raw_reply, output_format), False)
+            final_reply = _review_and_revise(prompt, messages, raw_reply) if review else raw_reply
+            return ConversationOutcome(_render_final_reply(final_reply, output_format), False)
 
         messages.append({"role": "assistant", "content": raw_reply})
 
         if followups_remaining <= 0:
             messages.append({"role": "user", "content": FORCED_COMPLETION_INSTRUCTION})
             raw_reply = _wait_for_model(messages, "Wrapping up...")
-            return ConversationOutcome(_render_final_reply(raw_reply, output_format), True)
+            final_reply = _review_and_revise(prompt, messages, raw_reply) if review else raw_reply
+            return ConversationOutcome(_render_final_reply(final_reply, output_format), True)
 
         typer.echo(f"\n{reply.question}\n")
         answer = typer.prompt("Your answer")

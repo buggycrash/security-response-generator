@@ -3,6 +3,8 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SETUP_SCRIPT = PROJECT_ROOT / "setup.sh"
 LAUNCHER = PROJECT_ROOT / "srg"
@@ -198,11 +200,12 @@ def test_cloud_model_detection():
     assert result.returncode == 0, result.stderr
 
 
-def test_setup_rejects_cloud_model_before_making_changes(tmp_path):
+@pytest.mark.parametrize("variable", ["SRG_GEN_MODEL", "SRG_REVIEW_MODEL", "SRG_EMBED_MODEL"])
+def test_setup_rejects_cloud_model_before_making_changes(tmp_path, variable):
     env = {
         **os.environ,
         "HOME": str(tmp_path),
-        "SRG_GEN_MODEL": "gpt-oss:120b-cloud",
+        variable: "gpt-oss:120b-cloud",
     }
 
     result = run_bash(str(SETUP_SCRIPT), cwd=tmp_path, env=env)

@@ -7,6 +7,7 @@ source "$PROJECT_ROOT/scripts/common.sh"
 
 INSTALL_DIR="${SRG_INSTALL_DIR:-$HOME/.local/bin}"
 GEN_MODEL="${SRG_GEN_MODEL:-$SRG_DEFAULT_GEN_MODEL}"
+REVIEW_MODEL="${SRG_REVIEW_MODEL:-$SRG_DEFAULT_REVIEW_MODEL}"
 EMBED_MODEL="${SRG_EMBED_MODEL:-$SRG_DEFAULT_EMBED_MODEL}"
 INSTALL_DEV=0
 DEV_ONLY=0
@@ -25,11 +26,13 @@ Options:
   --dev-only           Set up tests and Git hooks; skip launcher and Ollama
   --skip-models        Do not download Ollama models
   --model MODEL        Use and download a different generation model
+  --review-model MODEL Use and download a different reviewer model
   --install-dir DIR    Install the srg launcher here (default: ~/.local/bin)
   -h, --help           Show this help
 
 Environment:
   SRG_GEN_MODEL        Generation model (default: $SRG_DEFAULT_GEN_MODEL)
+  SRG_REVIEW_MODEL     Reviewer model (default: $SRG_DEFAULT_REVIEW_MODEL)
   SRG_EMBED_MODEL      Embedding model (default: $SRG_DEFAULT_EMBED_MODEL)
   SRG_INSTALL_DIR      Launcher directory (default: ~/.local/bin)
 EOF
@@ -47,6 +50,11 @@ while [ "$#" -gt 0 ]; do
     --model)
       [ "$#" -ge 2 ] || { srg_error "--model requires a value"; exit 2; }
       GEN_MODEL="$2"
+      shift
+      ;;
+    --review-model)
+      [ "$#" -ge 2 ] || { srg_error "--review-model requires a value"; exit 2; }
+      REVIEW_MODEL="$2"
       shift
       ;;
     --install-dir)
@@ -68,7 +76,8 @@ while [ "$#" -gt 0 ]; do
 done
 
 if [ "$DEV_ONLY" -eq 0 ] &&
-  { srg_model_is_cloud "$GEN_MODEL" || srg_model_is_cloud "$EMBED_MODEL"; }; then
+  { srg_model_is_cloud "$GEN_MODEL" || srg_model_is_cloud "$REVIEW_MODEL" ||
+    srg_model_is_cloud "$EMBED_MODEL"; }; then
   srg_error "Cloud-tagged Ollama models are not supported. Configure local models only."
   exit 2
 fi
@@ -124,6 +133,11 @@ check_installation() {
         pass "Generation model $GEN_MODEL"
       else
         fail "Generation model $GEN_MODEL"
+      fi
+      if srg_model_installed "$REVIEW_MODEL"; then
+        pass "Reviewer model $REVIEW_MODEL"
+      else
+        fail "Reviewer model $REVIEW_MODEL"
       fi
       if srg_model_installed "$EMBED_MODEL"; then
         pass "Embedding model $EMBED_MODEL"
@@ -246,12 +260,14 @@ else
       WARNING: Model weights are not included in SRG or covered by its MIT License.
       Setup downloads separately licensed runtime components into Ollama.
       Default model terms:
-        Gemma 4 E4B (QAT): https://ai.google.dev/gemma/terms
+        Gemma 4 E4B (QAT): https://www.apache.org/licenses/LICENSE-2.0
+        Gemma 4 E2B (QAT): https://www.apache.org/licenses/LICENSE-2.0
         EmbeddingGemma: https://ai.google.dev/gemma/terms
 EOF
   printf '      Configured generation model: %s\n' "$GEN_MODEL"
+  printf '      Configured reviewer model: %s\n' "$REVIEW_MODEL"
   printf '      Configured embedding model: %s\n' "$EMBED_MODEL"
-  for model in "$GEN_MODEL" "$EMBED_MODEL"; do
+  for model in "$GEN_MODEL" "$REVIEW_MODEL" "$EMBED_MODEL"; do
     if srg_model_installed "$model"; then
       printf '      %s already installed\n' "$model"
     else

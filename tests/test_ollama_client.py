@@ -198,6 +198,31 @@ def test_chat_messages_passes_response_format_through(monkeypatch):
     assert captured["format"] == schema
 
 
+def test_review_messages_uses_separately_configured_local_model(monkeypatch):
+    captured = {}
+
+    def fake_chat(model, messages, options, format, keep_alive):
+        captured.update(
+            model=model,
+            messages=messages,
+            format=format,
+            keep_alive=keep_alive,
+        )
+        return {"message": {"content": '{"critique":"revise"}'}}
+
+    monkeypatch.setattr(ollama_client._local_client(), "chat", fake_chat, raising=False)
+    schema = {"type": "object"}
+    messages = [{"role": "user", "content": "review this"}]
+
+    result = ollama_client.review_messages(messages, response_format=schema)
+
+    assert result == '{"critique":"revise"}'
+    assert captured["model"] == ollama_client.REVIEW_MODEL
+    assert captured["messages"] == messages
+    assert captured["format"] == schema
+    assert captured["keep_alive"] == ollama_client.REVIEW_KEEP_ALIVE
+
+
 def test_chat_messages_num_ctx_respects_override(monkeypatch):
     monkeypatch.setattr(ollama_client, "NUM_CTX", 32768)
     captured = {}
@@ -326,3 +351,15 @@ def test_embed_texts_rejects_cloud_model_before_creating_client(monkeypatch):
 
     with pytest.raises(ValueError, match="refuses Ollama cloud model"):
         ollama_client.embed_texts(["private document"])
+
+
+def test_review_messages_rejects_cloud_model_before_creating_client(monkeypatch):
+    monkeypatch.setattr(ollama_client, "REVIEW_MODEL", "reviewer:cloud")
+    monkeypatch.setattr(
+        ollama_client,
+        "_local_client",
+        lambda: (_ for _ in ()).throw(AssertionError("client must not be created")),
+    )
+
+    with pytest.raises(ValueError, match="refuses Ollama cloud model"):
+        ollama_client.review_messages([{"role": "user", "content": "private"}])

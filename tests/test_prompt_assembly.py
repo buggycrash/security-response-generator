@@ -30,16 +30,40 @@ def test_prompt_includes_all_sections_in_order_when_all_tiers_present():
         private_chunks=[_chunk("private system text")],
     )
 
-    assert prompt.system.startswith("SYSTEM INSTRUCTIONS")
-    assert ANALYST_FACTS_LABEL in prompt.system
-    assert "uses a SaaS SIEM" in prompt.system
+    assert prompt.system == "SYSTEM INSTRUCTIONS"
+    assert ANALYST_FACTS_LABEL in prompt.user
+    assert "uses a SaaS SIEM" in prompt.user
     assert prompt.user.index(CUSTOMER_LABEL) < prompt.user.index(BASELINE_LABEL)
     assert prompt.user.index(BASELINE_LABEL) < prompt.user.index(PRIVATE_LABEL)
     assert "state standard text" in prompt.user
     assert "nist baseline text" in prompt.user
     assert "private system text" in prompt.user
     assert "Control ID: SI-5" in prompt.user
-    assert ANALYST_FACTS_LABEL not in prompt.user
+    assert prompt.user.index("Control ID: SI-5") < prompt.user.index(ANALYST_FACTS_LABEL)
+    assert prompt.user.index(ANALYST_FACTS_LABEL) < prompt.user.index(FOLLOWUP_INSTRUCTION)
+
+
+def test_analyst_facts_moved_to_end_of_user_message_not_system():
+    # Regression test: analyst-provided context notes used to live in prompt.system,
+    # sent before the entire user turn -- far from the generation trigger. Moving them
+    # to the end of prompt.user, next to Control ID and FOLLOWUP_INSTRUCTION, is the
+    # fix for a bug where the model silently dropped analyst facts (e.g. a specific
+    # detail already topically "covered" by the customer standard).
+    prompt = assemble_prompt(
+        instructions="SYSTEM INSTRUCTIONS",
+        control_id="AC-2",
+        context_notes="12 account managers are assigned",
+        customer_chunks=[],
+        baseline_chunks=[_chunk("nist baseline text")],
+        private_chunks=[],
+    )
+
+    assert prompt.system == "SYSTEM INSTRUCTIONS"
+    assert ANALYST_FACTS_LABEL not in prompt.system
+    assert ANALYST_FACTS_LABEL in prompt.user
+    assert "12 account managers are assigned" in prompt.user
+    assert prompt.user.index("Control ID: AC-2") < prompt.user.index(ANALYST_FACTS_LABEL)
+    assert prompt.user.index(ANALYST_FACTS_LABEL) < prompt.user.index(FOLLOWUP_INSTRUCTION)
 
 
 def test_prompt_omits_customer_and_private_sections_when_absent():
