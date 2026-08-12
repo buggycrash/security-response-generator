@@ -611,8 +611,13 @@ def _review_and_revise(prompt: AssembledPrompt, messages: list[dict], draft: str
     candidate = draft
     for pass_number in (1, 2):
         with console.status(f"Reviewing draft ({pass_number}/2)..."):
+            # messages[0:2] are the original system/user prompt, already sent to
+            # assemble_review_messages explicitly as prompt.system/prompt.user --
+            # passing the full list here would duplicate the entire grounding
+            # material a second time (re-serialized as JSON), roughly doubling
+            # every review call's token cost for zero added information.
             raw_critique = review_messages(
-                assemble_review_messages(prompt, candidate, messages),
+                assemble_review_messages(prompt, candidate, messages[2:]),
                 response_format=REVIEW_SCHEMA,
             )
         critique = parse_critique(raw_critique)

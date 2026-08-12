@@ -1,28 +1,20 @@
 # knowledge_base/
 
-Drop universal, public, engagement-independent reference material here — most
-importantly the generated **NIST SP 800-53** control catalog. This tier is
-committed to git since it is public and does not change between customer
-engagements.
+The  **NIST SP 800-53** control catalog is the authoritative knowledge base. Version 5.2.0 is included with this tool.
 
-Supported formats: `.pdf`, `.md`, `.txt`.
-
-To download and convert the supported official OSCAL catalog:
+If NIST releases a newer revision, perform:
 
 ```bash
-srg update-nist
+srg update-nist --source <HTTPS-URL>
 ```
 
-The generated `NIST.SP.800-53-oscal.md` records its exact source, catalog
-version, and source SHA-256 digest. A future OSCAL release or local JSON file
-can be selected with `srg update-nist --source <HTTPS-URL-or-path>`.
+This will download the official OSCAL version directly from NIST and convert it to a format SRG can use.
 
-After adding or changing files here, run:
+The generated `NIST.SP.800-53-oscal.md` file records its exact source, catalog
+version, and source SHA-256 digest.
+
+After updating the knowledge base, run:
 
 ```bash
 srg ingest --source knowledge_base
 ```
-
-`srg generate <control-id>` treats this as the baseline source of truth for
-what a control *is*. If a control ID has no match anywhere in this folder,
-`srg generate` refuses to answer rather than let the model guess.
