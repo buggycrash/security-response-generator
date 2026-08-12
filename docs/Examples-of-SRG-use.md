@@ -50,17 +50,20 @@ Larger models are generally more reliable. The default Gemma4:E4B-it-qat model f
 | --- | --- |
 | Phi4-mini (3.8B) | Inconsistent, sometimes no output |
 | Llama3.2:3B | Poor alignment, sometimes wrong |
-| granite4.1:3B | Fair alignment, harsh prose, VERY temperature sensitive |
-| Qwen3.5:4B | Surprisingly good quality for a model this size, slow to output due to thinking, best sub 8B model by far, Chinese origin makes it unlikely to get customer approval for use. |
+| granite4.1:3B | Fair alignment but drifts to other controls, harsh prose |
+| Qwen3.5:4B | Surprisingly good quality for a model this size, slow to output due to thinking, best sub 8B model tested by far, Chinese origin makes it unlikely to get customer approval for use. |
 | Gemma3:4B | OK alignment but missed some details |
-| Gemma4:E2B | OK alignment but still missed some details even though a newer generation |
+| Gemma4:E2B | OK alignment but still missed some details even though a newer generation, VRAM far larger than "2b" would suggest |
+| Gemma4:E2B-it-qat | OK alignment, small VRAM footprint, chosen as the default reviewer model |
 | Llama3.1:8B | Consistent, generally well aligned, a mostly viable alternative to the default model due to quality, consistency, and 7GB VRAM usage size |
-| granite4.1:8B | Thorough, sometimes harsh prose, needs 8GB of VRAM thus won't fit on an 8GB card alongside embeddinggemma and other system activity |
+| granite4.1:8B | Thorough but drifts across control boundaries, sometimes harsh prose, needs 8GB of VRAM thus won't fit on an 8GB card alongside embeddinggemma and other system activity |
 | Qwen3:8B | Good alignment, 5.2GB VRAM usage would fit an 8GB card, Chinese origin makes it unlikely to get customer approval for use. |
 | Gemma4:E4B | Very good alignment and prose, but uses too much VRAM for even a 12GB card |
 | Gemma4:E4B-it-qat | Essentially Gemma4:E4B with a smaller VRAM footprint.  Set as the default model. |
 
-None of the tested 3B and 4B U.S.-based models produced output strong enough to recommend their use.  The Qwen3.5:4B model did surprisingly well for the size but was slow.  Passing it some parameters to disable thinking and vision might have increased the speed.
-Of the U.S.-based models, 8B appears to be the minimum for reliably aligned and consistent output that would actually save the user time compared to hand crafting responses.  
+None of the tested 3B and 4B U.S.-based models produced output strong enough to recommend their use.  
+The Qwen3.5:4B model did surprisingly well for the size but was slow.  Passing it some parameters to disable thinking and vision might have increased the speed.  
 
-Note the Gemma4:E4B is effectively 8B in this use case, but uses even more VRAM than either of the dedicated 8B models tested and would not fit comfortably on a 12GB card, where only 10GB of that was available to Ollama due to other system activity. The Gemma4:E4B`-it-qat` variant achieves nearly the same quality with under 4GB of VRAM.
+Of the U.S.-based models, The quantized (QAT) Gemma4 models provide the best all around quality in a small VRAM footprint.  Llama3.1:8B also proved capable and reliable, but used more VRAM while producing slightly lower quality.
+
+The market is moving rapidly and there appears to be considerable effort from Google, Alibaba, and Meta to provide viable smaller open weight models, presumably due to the cost of RAM.  

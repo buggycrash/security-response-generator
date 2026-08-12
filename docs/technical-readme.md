@@ -679,7 +679,7 @@ ruled it out.
 - The NIST SP 800-53 catalog (`knowledge_base/NIST.SP.800-53-oscal.md`) is
   about 1.3 MB / 170,000 words — roughly 250,000–330,000 tokens using this
   project's own chars-per-token convention (see the `NUM_CTX` comment in
-  `config.py`). That's already 2x larger than `llama3.1:8b`'s published
+  `config.py`). That's already 2x larger than the default model's published
   128,000-token context window on its own — it doesn't fit in a single
   request, regardless of hardware.
 - Real customer-standards bodies aren't small either. The example/demo
@@ -687,7 +687,7 @@ ruled it out.
   per-jurisdiction standards body for a real engagement can be substantially
   larger, often larger than the NIST catalog itself.
 - Even a model that could accept that much context would need the VRAM for
-  it: `llama3.1:8b`'s KV cache runs about 128 KiB per token of context
+  it: the default model's KV cache runs about 128 KiB per token of context
   (consistent with this project's documented ~7 GB VRAM footprint at the
   current `NUM_CTX=16384`). Holding a few hundred thousand tokens of context
   would need tens of GB of VRAM for KV cache alone, on top of model weights,
