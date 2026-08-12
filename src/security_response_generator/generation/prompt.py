@@ -73,12 +73,14 @@ FOLLOWUP_INSTRUCTION = (
     'include the [Validations] heading or validation suggestions inside "response". '
     "Before setting needs_info to false, verify that every relevant fact in the "
     "Analyst-Provided Facts section is explicitly stated or directly addressed in "
-    "the response. If an analyst fact means the condition for one control clause is "
-    "absent, state the operational effect without labeling clauses as applicable or "
-    "not applicable. Requirements that define, prohibit, or govern account and role "
-    "types still apply even when one account type is not deployed. Do not characterize "
-    "the entire control as not applicable. Follow all content and structure rules from "
-    "the system instructions."
+    "the response. A fact is not covered just because the customer/state standard or "
+    "baseline material already discusses the same general topic -- state the "
+    "analyst's specific detail explicitly. If an analyst fact means the condition for "
+    "one control clause is absent, state the operational effect without labeling "
+    "clauses as applicable or not applicable. Requirements that define, prohibit, or "
+    "govern account and role types still apply even when one account type is not "
+    "deployed. Do not characterize the entire control as not applicable. Follow all "
+    "content and structure rules from the system instructions."
 )
 
 BLANK_RESPONSE_RETRY_INSTRUCTION = (
@@ -151,18 +153,7 @@ def assemble_prompt(
     private_chunks: list[RetrievedChunk],
     output_format: OutputFormat = OutputFormat.markdown,
 ) -> AssembledPrompt:
-    system_sections = [instructions]
     sections: list[str] = []
-
-    if context_notes:
-        system_sections.extend(
-            (
-                ANALYST_FACTS_LABEL,
-                context_notes,
-                "These analyst-provided facts are authoritative for this response and "
-                "must be explicitly reflected in the implementation narrative.",
-            )
-        )
 
     if customer_chunks:
         sections.append(CUSTOMER_LABEL)
@@ -176,10 +167,29 @@ def assemble_prompt(
         sections.extend(chunk.text for chunk in private_chunks)
 
     sections.append(f"Control ID: {control_id}")
+
+    if context_notes:
+        # Placed last, immediately before FOLLOWUP_INSTRUCTION's own reminder to use
+        # these facts, rather than earlier in the system message -- content closer to
+        # the generation trigger gets more reliable compliance than content buried
+        # earlier in a long prompt (this previously sat in the system message, ahead
+        # of the customer-standard/baseline material, and was dropped far more often).
+        sections.extend(
+            (
+                ANALYST_FACTS_LABEL,
+                context_notes,
+                "These analyst-provided facts are authoritative for this response and "
+                "must be explicitly reflected in the implementation narrative, even if "
+                "the material above already discusses the same general topic (for "
+                "example, a standard already naming an account-manager role does not "
+                "make an analyst's specific detail about that role redundant).",
+            )
+        )
+
     sections.append(FOLLOWUP_INSTRUCTION)
     sections.append(_FORMAT_INSTRUCTIONS[output_format])
 
-    return AssembledPrompt(system="\n\n".join(system_sections), user="\n\n".join(sections))
+    return AssembledPrompt(system=instructions, user="\n\n".join(sections))
 
 
 def assemble_chat_prompt(

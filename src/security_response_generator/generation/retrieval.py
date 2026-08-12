@@ -25,6 +25,7 @@ class RetrievalResult:
     baseline_chunks: list[RetrievedChunk]
     private_chunks: list[RetrievedChunk]
     baseline_exact_match: bool
+    customer_exact_match: bool
 
     @property
     def has_baseline_match(self) -> bool:
@@ -32,7 +33,7 @@ class RetrievalResult:
 
     @property
     def has_customer_match(self) -> bool:
-        return bool(self.customer_chunks)
+        return self.customer_exact_match
 
 
 def to_chunks(query_result: dict) -> list[RetrievedChunk]:
@@ -184,7 +185,7 @@ def retrieve_for_control(control_id: str, context_notes: str, collections: dict)
     query_text = f"{control_id} {context_notes}".strip()
     query_embedding = embed_query(expand_query(query_text))
 
-    customer_chunks, _ = _query_collection(
+    customer_chunks, customer_exact_match = _query_collection(
         collections[config.COLLECTION_CUSTOMER_STANDARDS],
         control_id,
         query_embedding,
@@ -208,4 +209,5 @@ def retrieve_for_control(control_id: str, context_notes: str, collections: dict)
         baseline_chunks=baseline_chunks,
         private_chunks=private_chunks,
         baseline_exact_match=baseline_exact_match,
+        customer_exact_match=customer_exact_match,
     )

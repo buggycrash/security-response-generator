@@ -1,12 +1,18 @@
 import json
 
 import ollama
+import pytest
 from typer.testing import CliRunner
 
 from security_response_generator import cli
 from security_response_generator.generation.retrieval import RetrievalResult, RetrievedChunk
 
 runner = CliRunner()
+
+
+@pytest.fixture(autouse=True)
+def _skip_review_pipeline_in_legacy_bulk_tests(monkeypatch):
+    monkeypatch.setattr(cli, "_review_and_revise", lambda prompt, messages, draft: draft)
 
 
 def _baseline_chunk(chunk_id: str = "doc.md::0") -> RetrievedChunk:
@@ -19,12 +25,17 @@ def _matched_result() -> RetrievalResult:
         baseline_chunks=[_baseline_chunk()],
         private_chunks=[],
         baseline_exact_match=True,
+        customer_exact_match=False,
     )
 
 
 def _unmatched_result() -> RetrievalResult:
     return RetrievalResult(
-        customer_chunks=[], baseline_chunks=[], private_chunks=[], baseline_exact_match=False
+        customer_chunks=[],
+        baseline_chunks=[],
+        private_chunks=[],
+        baseline_exact_match=False,
+        customer_exact_match=False,
     )
 
 
@@ -103,6 +114,13 @@ def test_bulk_generate_happy_path_writes_one_file_per_row(monkeypatch, tmp_path)
         return retrieval_results[control_id]
 
     monkeypatch.setattr(cli, "retrieve_for_control", track_current)
+    reviewed = []
+
+    def fake_review(prompt, messages, draft):
+        reviewed.append(replies_by_control["_current"])
+        return draft
+
+    monkeypatch.setattr(cli, "_review_and_revise", fake_review)
 
     result = runner.invoke(cli.app, ["bulk-generate", str(csv_path), "-o", str(output_dir)])
 
@@ -111,6 +129,7 @@ def test_bulk_generate_happy_path_writes_one_file_per_row(monkeypatch, tmp_path)
     assert len(written) == 2
     assert any("AC-2 body" in path.read_text() for path in written)
     assert any("SI-5 body" in path.read_text() for path in written)
+    assert reviewed == ["AC-2", "SI-5"]
     assert "2 clean, 0 with notes, 2 total" in result.output
 
 

@@ -6,8 +6,10 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 GENERATION_MODEL = os.environ.get("SRG_GEN_MODEL", "gemma4:e4b-it-qat")
+REVIEW_MODEL = os.environ.get("SRG_REVIEW_MODEL", "gemma4:e2b-it-qat")
 EMBEDDING_MODEL = os.environ.get("SRG_EMBED_MODEL", "embeddinggemma")
 GENERATION_KEEP_ALIVE = os.environ.get("SRG_GEN_KEEP_ALIVE", "20m")
+REVIEW_KEEP_ALIVE = os.environ.get("SRG_REVIEW_KEEP_ALIVE", GENERATION_KEEP_ALIVE)
 
 # Defaults to the same duration as GENERATION_KEEP_ALIVE, since
 # embeddinggemma is invoked on every generate/chat call just like the

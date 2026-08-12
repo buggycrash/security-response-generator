@@ -171,7 +171,11 @@ def test_exact_match_chunks_falls_back_to_passing_mentions_if_no_heading_found()
 
 def test_retrieval_result_refusal_flag_reflects_exact_match_not_chunk_presence():
     no_baseline = RetrievalResult(
-        customer_chunks=[], baseline_chunks=[], private_chunks=[], baseline_exact_match=False
+        customer_chunks=[],
+        baseline_chunks=[],
+        private_chunks=[],
+        baseline_exact_match=False,
+        customer_exact_match=False,
     )
     assert no_baseline.has_baseline_match is False
 
@@ -180,6 +184,7 @@ def test_retrieval_result_refusal_flag_reflects_exact_match_not_chunk_presence()
         baseline_chunks=[_chunk("a")],
         private_chunks=[],
         baseline_exact_match=True,
+        customer_exact_match=False,
     )
     assert with_baseline.has_baseline_match is True
 
@@ -193,6 +198,7 @@ def test_retrieval_result_refusal_flag_ignores_semantic_only_baseline_chunks():
         baseline_chunks=[_chunk("a")],
         private_chunks=[],
         baseline_exact_match=False,
+        customer_exact_match=False,
     )
     assert semantic_only.has_baseline_match is False
 
@@ -203,6 +209,7 @@ def test_retrieval_result_customer_caveat_flag():
         baseline_chunks=[_chunk("a")],
         private_chunks=[],
         baseline_exact_match=True,
+        customer_exact_match=False,
     )
     assert no_customer.has_customer_match is False
 
@@ -211,8 +218,25 @@ def test_retrieval_result_customer_caveat_flag():
         baseline_chunks=[_chunk("a")],
         private_chunks=[],
         baseline_exact_match=True,
+        customer_exact_match=True,
     )
     assert with_customer.has_customer_match is True
+
+
+def test_retrieval_result_customer_caveat_flag_ignores_semantic_only_customer_chunks():
+    # Semantic-only customer chunks (e.g. SC-13 content returned for a query about
+    # SC-8(1), the only semantically-nearby content in a collection with no SC-8(1)
+    # entry) must not be treated as a genuine customer/state standard match --
+    # has_customer_match must not be fooled by customer_chunks being non-empty when
+    # no exact match was actually found.
+    semantic_only = RetrievalResult(
+        customer_chunks=[_chunk("a")],
+        baseline_chunks=[],
+        private_chunks=[],
+        baseline_exact_match=True,
+        customer_exact_match=False,
+    )
+    assert semantic_only.has_customer_match is False
 
 
 def test_semantic_search_returns_chunks_from_query():

@@ -15,6 +15,8 @@ from security_response_generator.config import (
     GENERATION_SEED,
     GENERATION_TEMPERATURE,
     NUM_CTX,
+    REVIEW_KEEP_ALIVE,
+    REVIEW_MODEL,
 )
 
 LOCAL_OLLAMA_HOST = "http://127.0.0.1:11434"
@@ -76,4 +78,23 @@ def chat_messages(messages: list[dict], response_format: dict | None = None) -> 
     content = response["message"]["content"]
     if DEBUG_RAW_REPLY:
         print(f"[SRG debug] raw model reply:\n{content}\n", file=sys.stderr)
+    return content
+
+
+def review_messages(messages: list[dict], response_format: dict | None = None) -> str:
+    """Send a review request to the separately configured local reviewer model."""
+    _require_local_model(REVIEW_MODEL)
+    options: dict = {"num_ctx": NUM_CTX, "seed": GENERATION_SEED}
+    if GENERATION_TEMPERATURE is not None:
+        options["temperature"] = GENERATION_TEMPERATURE
+    response = _local_client().chat(
+        model=REVIEW_MODEL,
+        messages=messages,
+        options=options,
+        format=response_format,
+        keep_alive=REVIEW_KEEP_ALIVE,
+    )
+    content = response["message"]["content"]
+    if DEBUG_RAW_REPLY:
+        print(f"[SRG debug] raw reviewer reply:\n{content}\n", file=sys.stderr)
     return content

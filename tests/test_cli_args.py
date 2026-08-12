@@ -1,5 +1,6 @@
 import json
 
+import pytest
 from typer.testing import CliRunner
 
 from security_response_generator import cli
@@ -16,6 +17,12 @@ from security_response_generator.ingest.chunking import Chunk
 
 runner = CliRunner()
 VALIDATION = "Screenshot of the relevant system screen showing the stated configuration."
+
+
+@pytest.fixture(autouse=True)
+def _skip_review_pipeline_in_legacy_cli_tests(monkeypatch):
+    """These tests exercise generation/follow-up behavior, not review orchestration."""
+    monkeypatch.setattr(cli, "_review_and_revise", lambda prompt, messages, draft: draft)
 
 
 def _final_reply(text: str, validations: list[str] | None = None) -> str:
@@ -105,7 +112,11 @@ def test_update_nist_reports_catalog_error(monkeypatch):
 
 def test_generate_refuses_when_no_baseline_match(monkeypatch):
     result_obj = RetrievalResult(
-        customer_chunks=[], baseline_chunks=[], private_chunks=[], baseline_exact_match=False
+        customer_chunks=[],
+        baseline_chunks=[],
+        private_chunks=[],
+        baseline_exact_match=False,
+        customer_exact_match=False,
     )
     _patch_common(monkeypatch, result_obj)
     chat_called = {"value": False}
@@ -129,6 +140,7 @@ def test_generate_refuses_for_fabricated_control_id_despite_semantic_hits(monkey
         baseline_chunks=[_baseline_chunk()],
         private_chunks=[],
         baseline_exact_match=False,
+        customer_exact_match=False,
     )
     _patch_common(monkeypatch, result_obj)
     chat_called = {"value": False}
@@ -149,6 +161,7 @@ def test_generate_prints_response_and_writes_output_file(monkeypatch, tmp_path):
         baseline_chunks=[_baseline_chunk()],
         private_chunks=[],
         baseline_exact_match=True,
+        customer_exact_match=True,
     )
     _patch_common(monkeypatch, result_obj, chat_return="# SI-5\nGenerated response")
     output_file = tmp_path / "response.md"
@@ -165,12 +178,102 @@ def test_generate_prints_response_and_writes_output_file(monkeypatch, tmp_path):
     )
 
 
+def test_generate_prepends_deterministic_note_when_no_customer_standard_matched(monkeypatch):
+    # SRG determines this from retrieval, not the model -- a small local reviewer/
+    # generator model handling this itself proved unreliable in both directions
+    # (sometimes omitting the caveat, sometimes claiming no standard existed when one
+    # did), so the caveat is code-generated and unconditional on model compliance.
+    result_obj = RetrievalResult(
+        customer_chunks=[],
+        baseline_chunks=[_baseline_chunk()],
+        private_chunks=[],
+        baseline_exact_match=True,
+        customer_exact_match=False,
+    )
+    _patch_common(monkeypatch, result_obj, chat_return="# SI-5\nGenerated response")
+
+    result = runner.invoke(cli.app, ["generate", "SI-5"])
+
+    assert result.exit_code == 0
+    assert "No customer- or state-specific standard was located for SI-5" in result.stdout
+
+
+def test_generate_omits_deterministic_note_when_customer_standard_matched(monkeypatch):
+    result_obj = RetrievalResult(
+        customer_chunks=[_baseline_chunk("customer.md::0")],
+        baseline_chunks=[_baseline_chunk()],
+        private_chunks=[],
+        baseline_exact_match=True,
+        customer_exact_match=True,
+    )
+    _patch_common(monkeypatch, result_obj, chat_return="# SI-5\nGenerated response")
+
+    result = runner.invoke(cli.app, ["generate", "SI-5"])
+
+    assert result.exit_code == 0
+    assert "No customer- or state-specific standard was located" not in result.stdout
+
+
+def test_generate_omits_semantic_only_customer_chunks_from_prompt(monkeypatch):
+    # A control with no genuine customer/state standard match can still pull back
+    # semantically-nearest customer chunks (e.g. SC-13 content for a SC-8(1) query,
+    # the only SC-family entry in a collection with no SC-8(1) match) -- those chunks
+    # must never reach assemble_prompt's "Authoritative" section when
+    # has_customer_match is False, even though customer_chunks itself is non-empty.
+    result_obj = RetrievalResult(
+        customer_chunks=[_baseline_chunk("customer.md::0")],
+        baseline_chunks=[_baseline_chunk()],
+        private_chunks=[],
+        baseline_exact_match=True,
+        customer_exact_match=False,
+    )
+    _patch_common(monkeypatch, result_obj, chat_return="response text")
+    captured = {}
+    original_assemble_prompt = cli.assemble_prompt
+
+    def spy_assemble_prompt(*args, **kwargs):
+        captured["customer_chunks"] = kwargs["customer_chunks"]
+        return original_assemble_prompt(*args, **kwargs)
+
+    monkeypatch.setattr(cli, "assemble_prompt", spy_assemble_prompt)
+
+    result = runner.invoke(cli.app, ["generate", "SI-5"])
+
+    assert result.exit_code == 0
+    assert captured["customer_chunks"] == []
+
+
+def test_generate_forwards_genuine_customer_chunks_to_prompt(monkeypatch):
+    result_obj = RetrievalResult(
+        customer_chunks=[_baseline_chunk("customer.md::0")],
+        baseline_chunks=[_baseline_chunk()],
+        private_chunks=[],
+        baseline_exact_match=True,
+        customer_exact_match=True,
+    )
+    _patch_common(monkeypatch, result_obj, chat_return="response text")
+    captured = {}
+    original_assemble_prompt = cli.assemble_prompt
+
+    def spy_assemble_prompt(*args, **kwargs):
+        captured["customer_chunks"] = kwargs["customer_chunks"]
+        return original_assemble_prompt(*args, **kwargs)
+
+    monkeypatch.setattr(cli, "assemble_prompt", spy_assemble_prompt)
+
+    result = runner.invoke(cli.app, ["generate", "SI-5"])
+
+    assert result.exit_code == 0
+    assert captured["customer_chunks"] == result_obj.customer_chunks
+
+
 def test_generate_without_output_flag_does_not_require_file(monkeypatch):
     result_obj = RetrievalResult(
         customer_chunks=[],
         baseline_chunks=[_baseline_chunk()],
         private_chunks=[],
         baseline_exact_match=True,
+        customer_exact_match=False,
     )
     _patch_common(monkeypatch, result_obj, chat_return="response text")
 
@@ -180,12 +283,58 @@ def test_generate_without_output_flag_does_not_require_file(monkeypatch):
     assert "response text" in result.stdout
 
 
+def test_generate_skips_review_by_default(monkeypatch):
+    result_obj = RetrievalResult(
+        customer_chunks=[],
+        baseline_chunks=[_baseline_chunk()],
+        private_chunks=[],
+        baseline_exact_match=True,
+        customer_exact_match=False,
+    )
+    _patch_common(monkeypatch, result_obj, chat_return=_final_reply("draft body"))
+    monkeypatch.setattr(
+        cli,
+        "_review_and_revise",
+        lambda *args: (_ for _ in ()).throw(AssertionError("review must be opt-in")),
+    )
+
+    result = runner.invoke(cli.app, ["generate", "SI-5"])
+
+    assert result.exit_code == 0, result.output
+    assert "draft body" in result.stdout
+
+
+def test_generate_review_flag_enables_review_pipeline(monkeypatch):
+    result_obj = RetrievalResult(
+        customer_chunks=[],
+        baseline_chunks=[_baseline_chunk()],
+        private_chunks=[],
+        baseline_exact_match=True,
+        customer_exact_match=False,
+    )
+    _patch_common(monkeypatch, result_obj, chat_return=_final_reply("draft body"))
+    calls = []
+
+    def fake_review(prompt, messages, draft):
+        calls.append(draft)
+        return _final_reply("reviewed body")
+
+    monkeypatch.setattr(cli, "_review_and_revise", fake_review)
+
+    result = runner.invoke(cli.app, ["generate", "SI-5", "--review"])
+
+    assert result.exit_code == 0, result.output
+    assert calls == [_final_reply("draft body")]
+    assert "reviewed body" in result.stdout
+
+
 def test_generate_text_format_normalizes_output(monkeypatch):
     result_obj = RetrievalResult(
         customer_chunks=[],
         baseline_chunks=[_baseline_chunk()],
         private_chunks=[],
         baseline_exact_match=True,
+        customer_exact_match=False,
     )
     _patch_common(monkeypatch, result_obj, chat_return="## SI-5\n\n“Quoted” response — done.")
 
@@ -205,6 +354,7 @@ def test_generate_markdown_format_is_default_and_unmodified(monkeypatch):
         baseline_chunks=[_baseline_chunk()],
         private_chunks=[],
         baseline_exact_match=True,
+        customer_exact_match=False,
     )
     _patch_common(monkeypatch, result_obj, chat_return="## SI-5\n\n“Quoted” response.")
 
@@ -224,6 +374,7 @@ def test_generate_labels_customer_engagement_in_plain_ascii_without_uppercasing(
         baseline_chunks=[_baseline_chunk()],
         private_chunks=[],
         baseline_exact_match=True,
+        customer_exact_match=False,
     )
     _patch_common(monkeypatch, result_obj, chat_return="Normal sentence capitalization.")
     engagement = cli.engagements.Engagement("acme-health", "Acme Héalth", tmp_path)
@@ -244,6 +395,7 @@ def test_generate_text_format_default_output_filename_uses_txt_extension(monkeyp
         baseline_chunks=[_baseline_chunk()],
         private_chunks=[],
         baseline_exact_match=True,
+        customer_exact_match=False,
     )
     _patch_common(monkeypatch, result_obj, chat_return="response text")
 
@@ -260,6 +412,7 @@ def test_generate_markdown_format_default_output_filename_uses_md_extension(monk
         baseline_chunks=[_baseline_chunk()],
         private_chunks=[],
         baseline_exact_match=True,
+        customer_exact_match=False,
     )
     _patch_common(monkeypatch, result_obj, chat_return="response text")
 

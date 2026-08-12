@@ -32,8 +32,8 @@ Security Response Generator (`srg`) is a local CLI that drafts NIST SP
 - Customer approval to use local AI tooling for the engagement
 - Python 3.11 or newer
 - [Ollama](https://ollama.com/download)
-- Approximately 7 GB of available GPU or unified memory for the default
-  generation and embedding models
+- Enough local memory for the default generation, reviewer, and embedding
+  models (Ollama may unload models between pipeline stages on constrained systems).  In practice, the default models need about 8GB of VRAM total.
 
 ## Supported platforms
 

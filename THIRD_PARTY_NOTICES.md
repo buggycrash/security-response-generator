@@ -12,10 +12,10 @@ local model storage unless it is run with `./setup.sh --skip-models`. They
 then become runtime components used by the installed project, but they are
 not covered by this project's MIT License.
 
-- **Gemma 4 E4B (QAT)** is subject to the
-  [Gemma Terms of Use](https://ai.google.dev/gemma/terms), including its
-  incorporated prohibited-use policy.
-- **EmbeddingGemma** is subject to the
+- **Gemma 4 E4B (QAT)** (default generation model) and **Gemma 4 E2B (QAT)**
+  (default reviewer model) are distributed under the
+  [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0).
+- **EmbeddingGemma** (default embedding model) is subject to the
   [Gemma Terms of Use](https://ai.google.dev/gemma/terms), including its
   incorporated prohibited-use policy.
 

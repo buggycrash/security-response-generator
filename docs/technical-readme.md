@@ -35,7 +35,8 @@ generation model connects the two even when the wording differs.
 ## Features
 
 - Three-tier retrieval that respects customer/state standards as
-  authoritative when they exist, and explicitly flags when they don't.
+  authoritative when they exist. SRG itself (not the model) determines and
+  states when no customer/state standard was found for a control.
 - Runs on U.S.-developed, open-weight models (Gemma4:E4B-it-qat by default; see
   [Choosing a generation model](#choosing-a-generation-model)) rather than a
   closed-source or overseas API.
@@ -82,6 +83,8 @@ generation model connects the two even when the wording differs.
   the embedding model. It is swappable through `SRG_GEN_MODEL`; see
   [Choosing a generation model](#choosing-a-generation-model) for tested
   models and results.
+- **Reviewer model**: Gemma4 E2B QAT via Ollama by default, independently
+  swappable through `SRG_REVIEW_MODEL`
 - **Embedding model**: EmbeddingGemma via Ollama
 - **Vector store**: ChromaDB (embedded/local, no server)
 - **CLI**: [Typer](https://typer.tiangolo.com)
@@ -112,7 +115,8 @@ cd security-response-generator
 ```
 
 This creates a `.venv`, installs the package, starts Ollama when needed,
-pulls both models (`gemma4:e4b-it-qat` and `embeddinggemma`), and installs a
+pulls the generation, reviewer, and embedding models (`gemma4:e4b-it-qat`,
+`gemma4:e2b-it-qat`, and `embeddinggemma`), and installs a
 small launcher at `~/.local/bin/srg`. The launcher invokes the project
 virtual environment directly, so it does not need to be activated.
 
@@ -156,9 +160,12 @@ demo data while preserving the committed fictional demo seed files.
 > Model weights are not included in this source repository and are not
 > covered by its MIT License. Running `./setup.sh` without `--skip-models`
 > downloads them into Ollama's local model storage, where they become
-> separately licensed runtime components of the installed project. Both the
-> default generation model and the default embedding model are governed by
-> the [Gemma Terms of Use](https://ai.google.dev/gemma/terms).
+> separately licensed runtime components of the installed project. The
+> default generation and reviewer models are governed by the
+> [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0); the
+> default embedding model is governed by the
+> [Gemma Terms of Use](https://ai.google.dev/gemma/terms). See
+> [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
 
 The default, `gemma4:e4b-it-qat`, was selected after direct comparisons on
 SRG's retrieval and generation workload against every other model in the
@@ -215,15 +222,33 @@ SRG_GEN_MODEL=llama3.1:8b srg generate SI-5 --context "..."
 To make a switch permanent for your own sessions, export `SRG_GEN_MODEL` in
 your shell profile.
 
+When review is active, the pipeline uses `gemma4:e2b-it-qat` by default,
+matching the generation model's family. Review is automatic for
+`bulk-generate` and opt-in with `srg generate --review`. Override the
+reviewer model independently:
+
+```bash
+ollama pull llama3.1:8b
+SRG_REVIEW_MODEL=llama3.1:8b srg generate SI-5 --context "..."
+```
+
+Local open-weight model quality is a fast-moving target — new and improved
+releases show up often enough that today's defaults shouldn't be treated as
+permanent. It's worth periodically re-testing both the generation and
+reviewer model choices against your own prompts and hardware as new models
+become available.
+
 After each generation request, SRG asks Ollama to keep the generation model
 loaded for 20 minutes to make subsequent runs faster. `embeddinggemma` is
 kept loaded for that same duration by default, since it's invoked on every
 `generate` and `chat` call for retrieval and has its own non-trivial load
-time. Override either duration independently with `SRG_GEN_KEEP_ALIVE` and
+time. The reviewer uses the same duration by default. Override durations
+independently with `SRG_GEN_KEEP_ALIVE`, `SRG_REVIEW_KEEP_ALIVE`, and
 `SRG_EMBED_KEEP_ALIVE`, using an Ollama duration such as `30m` or `1h`:
 
 ```bash
 SRG_GEN_KEEP_ALIVE=30m srg generate SI-5
+SRG_REVIEW_KEEP_ALIVE=30m srg generate SI-5
 SRG_EMBED_KEEP_ALIVE=30m srg generate SI-5
 ```
 
@@ -426,6 +451,9 @@ It never asks a follow-up question and never blocks on input — a control that
 would have needed one gets a best-effort response instead, exactly like
 `srg generate` after its follow-up budget runs out (see
 [Interactive follow-up questions](#interactive-follow-up-questions)).
+Every bulk response automatically receives two reviewer critiques and two
+generator revisions. Bulk generation has no human in the loop, and its
+unattended throughput makes the added time to completion less important than the extra quality check.
 
 ```bash
 srg bulk-generate -o engagements/northbridge-SALI/responses controls.csv 
@@ -579,10 +607,16 @@ manually — see the "Manual verification" section below.
    control ID, once by semantic similarity — and the results are merged,
    with `customer_standards` and `private_context` given protected
    top-k slots so they aren't drowned out by the much larger NIST corpus.
-4. **Refuse or caveat**: if the NIST baseline has no match for the control
-   ID, the tool refuses and exits non-zero rather than guessing. If the
-   baseline matches but no customer/state standard does, generation
-   proceeds but the model is instructed to say so explicitly.
+4. **Refuse or caveat**: if the NIST baseline has no exact match for the control
+   ID, the tool refuses and exits non-zero rather than guessing. The same
+   exact-match check (not mere semantic proximity) determines whether a genuine
+   customer/state standard match exists: if the baseline matches but no
+   customer/state standard does, generation proceeds and SRG itself prepends an
+   explicit note to that effect after generation completes -- this determination
+   is made from the retrieval result in code, not left to the model, since a
+   small local model self-reporting this proved unreliable in both directions
+   (silently omitting the caveat, and occasionally claiming no standard existed
+   when one actually did).
 5. **Generate**: retrieved chunks (labeled by tier), the control ID, and
    the analyst's notes are assembled into a prompt alongside
    `prompts/instructions.md` (editable — controls tone, implementation
@@ -612,13 +646,27 @@ manually — see the "Manual verification" section below.
    `SRG_MAX_FOLLOWUP_TURNS` times (default 2). If the budget runs out, one
    final call forces a best-effort response with `[PLACEHOLDER: ...]`
    markers for anything still unaddressed.
-7. **Normalize (text format only)**: if `--format text` was requested, the
+7. **Review and revise when enabled**: `bulk-generate` always runs two review
+   passes; interactive `srg generate` runs them only with `--review`. Once a
+   complete draft exists, the separate local reviewer checks it against the
+   original instructions, grounding material, and analyst facts. Its critique
+   goes to the generator for a complete revision, then SRG repeats that cycle
+   once. These stages do not prompt the human; missing facts remain explicit
+   placeholders.
+
+   Review is opt-in for interactive generation because the analyst is already
+   the reviewer: they can inspect the draft and rerun or re-prompt with better
+   facts and clarifications. Skipping four additional model calls also avoids
+   a significant wait in an intentionally interactive workflow. Bulk generation
+   makes the opposite tradeoff: there is no human reviewer during the run, and
+   time to completion is less important for unattended work, so review remains mandatory.
+8. **Normalize (text format only)**: if `--format text` was requested, the
    raw model output is run through `generation/formatting.py`, which
    converts smart quotes/em-dashes/bullets to ASCII equivalents, strips any
    leftover Markdown syntax, and drops any remaining non-ASCII characters —
    a code-level guarantee independent of how well the model followed the
    prompt instruction.
-8. **Output**: the response is printed to stdout and optionally written to
+9. **Output**: the response is printed to stdout and optionally written to
    a file.
 
 ### Why RAG instead of long-context stuffing
@@ -751,7 +799,8 @@ end-to-end behavior manually after setup:
 1. `./setup.sh`
 2. `srg use-engagement demo`, then `srg ingest`
 3. `srg generate SI-5 --context "..."` — confirm the response starts with
-   `Customer: DEMO` and notes that no customer standard was found
+   `Customer: DEMO` followed by SRG's own note that no customer standard was
+   found (not a claim from the model)
 4. `srg create-engagement test-customer`
 5. Add a sample SI-5 customer standard and fictional private-context file to
    the paths printed by the command
@@ -765,7 +814,10 @@ end-to-end behavior manually after setup:
     plain ASCII
 11. `srg generate "SC-8(1)" --context "TLS 1.3 protects information in
     transit."` — confirm control enhancements are retrieved and generated
-    like base controls
+    like base controls, that SRG's own note states no customer/state standard
+    was found for SC-8(1) (the demo engagement's only SC-family customer
+    content is for SC-13), and that the response contains no SC-13
+    cryptographic-protection material
 12. Confirm both Markdown and plain-text output contain exactly one
     `[Validations]` section after the implementation narrative
 13. Ingest a control whose requirements clearly need something not in the

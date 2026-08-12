@@ -4,6 +4,7 @@
 
 # shellcheck disable=SC2034 # These defaults are consumed by scripts that source this file.
 SRG_DEFAULT_GEN_MODEL="gemma4:e4b-it-qat"
+SRG_DEFAULT_REVIEW_MODEL="gemma4:e2b-it-qat"
 SRG_DEFAULT_EMBED_MODEL="embeddinggemma"
 
 # Keep every Ollama CLI call on loopback and disable Ollama cloud features
