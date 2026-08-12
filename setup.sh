@@ -260,8 +260,8 @@ else
       WARNING: Model weights are not included in SRG or covered by its MIT License.
       Setup downloads separately licensed runtime components into Ollama.
       Default model terms:
-        Gemma 4 E4B (QAT): https://ai.google.dev/gemma/terms
-        Granite 4.1: https://www.apache.org/licenses/LICENSE-2.0
+        Gemma 4 E4B (QAT): https://www.apache.org/licenses/LICENSE-2.0
+        Gemma 4 E2B (QAT): https://www.apache.org/licenses/LICENSE-2.0
         EmbeddingGemma: https://ai.google.dev/gemma/terms
 EOF
   printf '      Configured generation model: %s\n' "$GEN_MODEL"
