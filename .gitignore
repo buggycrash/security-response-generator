@@ -30,10 +30,6 @@ engagements/*/responses/
 # Local active-engagement selection
 .srg/
 
-# Legacy pre-engagement locations may still contain sensitive user files.
-/customer_standards/
-/private_context/
-
 # Env / secrets
 .env
 .env.local

@@ -40,8 +40,12 @@ generator to add it by name. Do not summarize this check with a vague, hedged ju
 such as "most facts are present" or "largely addressed" -- either name each missing
 fact specifically or state affirmatively that all analyst facts are present.
 
-Give concise, actionable correction instructions to the response generator. Do not
-rewrite the response and do not ask the human analyst questions. Return only the
+Give concise, actionable correction instructions to the response generator. Phrase
+every instruction as something the generator must do (for example, "State X
+explicitly," "Add Y," "Correct Z") -- never describe what you yourself intend to do
+(for example, never write "I will revise..." or "I will add..."); you do not produce
+the revision, a separate generator model does that after reading your critique. Do
+not rewrite the response and do not ask the human analyst questions. Return only the
 required JSON object."""
 
 
@@ -50,7 +54,14 @@ def assemble_review_messages(
     candidate: str,
     conversation: list[dict] | None = None,
 ) -> list[dict]:
-    """Give the reviewer all grounding, including clarification answers."""
+    """Give the reviewer all grounding, including clarification answers.
+
+    `conversation` must NOT include the original system/user prompt entries
+    (`prompt.system`/`prompt.user`) -- those are already included explicitly
+    above. Pass only what came after them (follow-up Q&A turns, or prior
+    review-pass draft/revision-instruction turns); including the original
+    prompt again here would duplicate the full grounding material.
+    """
     conversation_text = json.dumps(conversation or [], ensure_ascii=False)
     return [
         {"role": "system", "content": REVIEW_SYSTEM_INSTRUCTION},
