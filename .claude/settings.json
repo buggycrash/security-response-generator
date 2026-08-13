@@ -1,5 +1,19 @@
 {
   "permissions": {
+    "allow": [
+      "Bash(ruff check:*)",
+      "Bash(ruff format --check:*)",
+      "Bash(.venv/bin/ruff check:*)",
+      "Bash(.venv/bin/ruff format --check:*)",
+      "Bash(pytest:*)",
+      "Bash(.venv/bin/pytest:*)",
+      "Bash(.git-hooks/pre-commit)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(./setup.sh --check)"
+    ],
     "deny": [
       "Bash(git commit:*)",
       "Bash(git commit *)",
