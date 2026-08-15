@@ -296,7 +296,7 @@ def test_retrieve_for_chat_embeds_the_terminology_expanded_query(monkeypatch):
 def test_retrieve_for_control_embeds_the_terminology_expanded_query(monkeypatch):
     captured: dict = {}
 
-    def _fake_embed_query(text):
+    def _fake_embed_query(text, *, on_response=None):
         captured["text"] = text
         return [0.0]
 

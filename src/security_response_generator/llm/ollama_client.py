@@ -1,7 +1,7 @@
 """Thin wrapper around the local Ollama client for embeddings and chat."""
 
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 
 import ollama
 
@@ -37,13 +37,21 @@ def _require_local_model(model: str) -> None:
 
 
 def embed_texts(
-    texts: list[str], on_batch: Callable[[int], None] | None = None
+    texts: list[str],
+    on_batch: Callable[[int], None] | None = None,
+    *,
+    on_response: Callable[[Mapping], None] | None = None,
 ) -> list[list[float]]:
     """Embed texts in EMBED_BATCH_SIZE-sized batches.
 
     If on_batch is given, it's called with the number of texts just embedded
     after each batch completes, so callers can drive a progress indicator
     without needing to know about batching themselves.
+
+    If on_response is given, it's called with each batch's raw Ollama
+    response (which carries server-side timing fields like load_duration
+    alongside the embeddings) -- used by diagnostic tooling, not by normal
+    callers.
     """
     if not texts:
         return []
@@ -53,17 +61,24 @@ def embed_texts(
     for start in range(0, len(texts), EMBED_BATCH_SIZE):
         batch = texts[start : start + EMBED_BATCH_SIZE]
         response = client.embed(model=EMBEDDING_MODEL, input=batch, keep_alive=EMBED_KEEP_ALIVE)
+        if on_response is not None:
+            on_response(response)
         embeddings.extend(response["embeddings"])
         if on_batch is not None:
             on_batch(len(batch))
     return embeddings
 
 
-def embed_query(text: str) -> list[float]:
-    return embed_texts([text])[0]
+def embed_query(text: str, *, on_response: Callable[[Mapping], None] | None = None) -> list[float]:
+    return embed_texts([text], on_response=on_response)[0]
 
 
-def chat_messages(messages: list[dict], response_format: dict | None = None) -> str:
+def chat_messages(
+    messages: list[dict],
+    response_format: dict | None = None,
+    *,
+    on_response: Callable[[Mapping], None] | None = None,
+) -> str:
     _require_local_model(GENERATION_MODEL)
     options: dict = {"num_ctx": NUM_CTX, "seed": GENERATION_SEED}
     if GENERATION_TEMPERATURE is not None:
@@ -75,13 +90,20 @@ def chat_messages(messages: list[dict], response_format: dict | None = None) -> 
         format=response_format,
         keep_alive=GENERATION_KEEP_ALIVE,
     )
+    if on_response is not None:
+        on_response(response)
     content = response["message"]["content"]
     if DEBUG_RAW_REPLY:
         print(f"[SRG debug] raw model reply:\n{content}\n", file=sys.stderr)
     return content
 
 
-def review_messages(messages: list[dict], response_format: dict | None = None) -> str:
+def review_messages(
+    messages: list[dict],
+    response_format: dict | None = None,
+    *,
+    on_response: Callable[[Mapping], None] | None = None,
+) -> str:
     """Send a review request to the separately configured local reviewer model."""
     _require_local_model(REVIEW_MODEL)
     options: dict = {"num_ctx": NUM_CTX, "seed": GENERATION_SEED}
@@ -94,6 +116,8 @@ def review_messages(messages: list[dict], response_format: dict | None = None) -
         format=response_format,
         keep_alive=REVIEW_KEEP_ALIVE,
     )
+    if on_response is not None:
+        on_response(response)
     content = response["message"]["content"]
     if DEBUG_RAW_REPLY:
         print(f"[SRG debug] raw reviewer reply:\n{content}\n", file=sys.stderr)

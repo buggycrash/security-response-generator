@@ -12,7 +12,7 @@ runner = CliRunner()
 
 @pytest.fixture(autouse=True)
 def _skip_review_pipeline_in_legacy_bulk_tests(monkeypatch):
-    monkeypatch.setattr(cli, "_review_and_revise", lambda prompt, messages, draft: draft)
+    monkeypatch.setattr(cli, "_review_and_revise", lambda prompt, messages, draft, **kwargs: draft)
 
 
 def _baseline_chunk(chunk_id: str = "doc.md::0") -> RetrievedChunk:
@@ -76,12 +76,12 @@ def _patch_bulk_common(monkeypatch, retrieval_results, chat_replies, knowledge_b
     monkeypatch.setattr(
         cli,
         "retrieve_for_control",
-        lambda control_id, context, collections: results_by_control[control_id],
+        lambda control_id, context, collections, **kwargs: results_by_control[control_id],
     )
 
     replies_by_control = dict(chat_replies)
 
-    def fake_chat_messages(messages, response_format=None):
+    def fake_chat_messages(messages, response_format=None, *, on_response=None):
         control_id = replies_by_control["_current"]
         replies = replies_by_control[control_id]
         return replies.pop(0)
@@ -109,14 +109,14 @@ def test_bulk_generate_happy_path_writes_one_file_per_row(monkeypatch, tmp_path)
         {"AC-2": [_final_reply("AC-2 body")], "SI-5": [_final_reply("SI-5 body")]},
     )
 
-    def track_current(control_id, context, collections):
+    def track_current(control_id, context, collections, **kwargs):
         replies_by_control["_current"] = control_id
         return retrieval_results[control_id]
 
     monkeypatch.setattr(cli, "retrieve_for_control", track_current)
     reviewed = []
 
-    def fake_review(prompt, messages, draft):
+    def fake_review(prompt, messages, draft, **kwargs):
         reviewed.append(replies_by_control["_current"])
         return draft
 
@@ -142,7 +142,7 @@ def test_bulk_generate_notes_unmatched_control_and_continues(monkeypatch, tmp_pa
         monkeypatch, retrieval_results, {"AC-2": [_final_reply("AC-2 body")]}
     )
 
-    def track_current(control_id, context, collections):
+    def track_current(control_id, context, collections, **kwargs):
         replies_by_control["_current"] = control_id
         return retrieval_results[control_id]
 
@@ -169,7 +169,7 @@ def test_bulk_generate_never_prompts_and_notes_suppressed_question(monkeypatch, 
         {"AC-2": [_followup_reply("what SIEM?"), _final_reply("best effort body")]},
     )
 
-    def track_current(control_id, context, collections):
+    def track_current(control_id, context, collections, **kwargs):
         replies_by_control["_current"] = control_id
         return retrieval_results[control_id]
 
@@ -212,12 +212,12 @@ def test_bulk_generate_aborts_on_systemic_ollama_failure(monkeypatch, tmp_path):
     monkeypatch.setattr(
         cli,
         "retrieve_for_control",
-        lambda control_id, context, collections: retrieval_results[control_id],
+        lambda control_id, context, collections, **kwargs: retrieval_results[control_id],
     )
 
     call_count = {"value": 0}
 
-    def fake_chat_messages(messages, response_format=None):
+    def fake_chat_messages(messages, response_format=None, *, on_response=None):
         call_count["value"] += 1
         if call_count["value"] == 2:
             raise ConnectionError("Ollama unreachable")
@@ -255,10 +255,10 @@ def test_bulk_generate_aborts_on_systemic_ollama_response_error(monkeypatch, tmp
     monkeypatch.setattr(
         cli,
         "retrieve_for_control",
-        lambda control_id, context, collections: retrieval_results[control_id],
+        lambda control_id, context, collections, **kwargs: retrieval_results[control_id],
     )
 
-    def fake_chat_messages(messages, response_format=None):
+    def fake_chat_messages(messages, response_format=None, *, on_response=None):
         raise ollama.ResponseError("model not pulled")
 
     monkeypatch.setattr(cli, "chat_messages", fake_chat_messages)
@@ -331,7 +331,7 @@ def test_bulk_generate_creates_missing_output_dir(monkeypatch, tmp_path):
         monkeypatch, retrieval_results, {"AC-2": [_final_reply("AC-2 body")]}
     )
 
-    def track_current(control_id, context, collections):
+    def track_current(control_id, context, collections, **kwargs):
         replies_by_control["_current"] = control_id
         return retrieval_results[control_id]
 
@@ -353,7 +353,7 @@ def test_bulk_generate_text_format_uses_txt_extension(monkeypatch, tmp_path):
         monkeypatch, retrieval_results, {"AC-2": [_final_reply("AC-2 body")]}
     )
 
-    def track_current(control_id, context, collections):
+    def track_current(control_id, context, collections, **kwargs):
         replies_by_control["_current"] = control_id
         return retrieval_results[control_id]
 
@@ -380,7 +380,7 @@ def test_bulk_generate_rerun_same_day_overwrites_prior_file(monkeypatch, tmp_pat
             monkeypatch, retrieval_results, {"AC-2": [_final_reply(body_text)]}
         )
 
-        def track_current(control_id, context, collections):
+        def track_current(control_id, context, collections, **kwargs):
             replies_by_control["_current"] = control_id
             return retrieval_results[control_id]
 

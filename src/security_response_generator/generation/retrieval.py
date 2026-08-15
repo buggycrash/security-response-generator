@@ -1,6 +1,8 @@
 """Retrieve relevant chunks per source tier for a given control ID + query."""
 
 import re
+import time
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 from security_response_generator import config
@@ -34,6 +36,13 @@ class RetrievalResult:
     @property
     def has_customer_match(self) -> bool:
         return self.customer_exact_match
+
+
+@dataclass
+class RetrievalTiming:
+    embedding_seconds: float
+    chroma_seconds: float
+    chroma_seconds_by_collection: dict[str, float]
 
 
 def to_chunks(query_result: dict) -> list[RetrievedChunk]:
@@ -181,28 +190,48 @@ def retrieve_for_chat(question: str, collections: dict) -> ChatRetrievalResult:
     )
 
 
-def retrieve_for_control(control_id: str, context_notes: str, collections: dict) -> RetrievalResult:
+def retrieve_for_control(
+    control_id: str,
+    context_notes: str,
+    collections: dict,
+    *,
+    on_timing: Callable[[RetrievalTiming], None] | None = None,
+    on_embed_response: Callable[[Mapping], None] | None = None,
+) -> RetrievalResult:
     query_text = f"{control_id} {context_notes}".strip()
-    query_embedding = embed_query(expand_query(query_text))
 
-    customer_chunks, customer_exact_match = _query_collection(
-        collections[config.COLLECTION_CUSTOMER_STANDARDS],
-        control_id,
-        query_embedding,
-        config.TOP_K_CUSTOMER_STANDARDS,
+    embed_start = time.perf_counter()
+    query_embedding = embed_query(expand_query(query_text), on_response=on_embed_response)
+    embedding_seconds = time.perf_counter() - embed_start
+
+    chroma_seconds_by_collection: dict[str, float] = {}
+
+    def _timed_query(name: str, top_k: int) -> tuple[list[RetrievedChunk], bool]:
+        start = time.perf_counter()
+        chunks, exact_match = _query_collection(
+            collections[name], control_id, query_embedding, top_k
+        )
+        chroma_seconds_by_collection[name] = time.perf_counter() - start
+        return chunks, exact_match
+
+    customer_chunks, customer_exact_match = _timed_query(
+        config.COLLECTION_CUSTOMER_STANDARDS, config.TOP_K_CUSTOMER_STANDARDS
     )
-    baseline_chunks, baseline_exact_match = _query_collection(
-        collections[config.COLLECTION_KNOWLEDGE_BASE],
-        control_id,
-        query_embedding,
-        config.TOP_K_KNOWLEDGE_BASE,
+    baseline_chunks, baseline_exact_match = _timed_query(
+        config.COLLECTION_KNOWLEDGE_BASE, config.TOP_K_KNOWLEDGE_BASE
     )
-    private_chunks, _ = _query_collection(
-        collections[config.COLLECTION_PRIVATE_CONTEXT],
-        control_id,
-        query_embedding,
-        config.TOP_K_PRIVATE_CONTEXT,
+    private_chunks, _ = _timed_query(
+        config.COLLECTION_PRIVATE_CONTEXT, config.TOP_K_PRIVATE_CONTEXT
     )
+
+    if on_timing is not None:
+        on_timing(
+            RetrievalTiming(
+                embedding_seconds=embedding_seconds,
+                chroma_seconds=sum(chroma_seconds_by_collection.values()),
+                chroma_seconds_by_collection=chroma_seconds_by_collection,
+            )
+        )
 
     return RetrievalResult(
         customer_chunks=customer_chunks,

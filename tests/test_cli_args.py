@@ -22,7 +22,7 @@ VALIDATION = "Screenshot of the relevant system screen showing the stated config
 @pytest.fixture(autouse=True)
 def _skip_review_pipeline_in_legacy_cli_tests(monkeypatch):
     """These tests exercise generation/follow-up behavior, not review orchestration."""
-    monkeypatch.setattr(cli, "_review_and_revise", lambda prompt, messages, draft: draft)
+    monkeypatch.setattr(cli, "_review_and_revise", lambda prompt, messages, draft, **kwargs: draft)
 
 
 def _final_reply(text: str, validations: list[str] | None = None) -> str:
@@ -64,9 +64,11 @@ def _patch_common(
     monkeypatch.setattr(
         cli,
         "retrieve_for_control",
-        lambda control_id, context, collections: retrieval_result,
+        lambda control_id, context, collections, **kwargs: retrieval_result,
     )
-    monkeypatch.setattr(cli, "chat_messages", lambda messages, response_format=None: chat_return)
+    monkeypatch.setattr(
+        cli, "chat_messages", lambda messages, response_format=None, **kwargs: chat_return
+    )
 
 
 def test_update_nist_converts_catalog_and_prints_ingest_next_step(monkeypatch, tmp_path):
@@ -319,7 +321,7 @@ def test_generate_review_flag_enables_review_pipeline(monkeypatch):
     _patch_common(monkeypatch, result_obj, chat_return=_final_reply("draft body"))
     calls = []
 
-    def fake_review(prompt, messages, draft):
+    def fake_review(prompt, messages, draft, **kwargs):
         calls.append(draft)
         return _final_reply("reviewed body")
 
@@ -439,7 +441,9 @@ def _patch_chat_common(
     monkeypatch.setattr(cli, "get_client", lambda path=None: object())
     monkeypatch.setattr(cli, "get_collection", lambda client, name: object())
     monkeypatch.setattr(cli, "retrieve_for_chat", lambda question, collections: chat_result)
-    monkeypatch.setattr(cli, "chat_messages", lambda messages, response_format=None: chat_return)
+    monkeypatch.setattr(
+        cli, "chat_messages", lambda messages, response_format=None, **kwargs: chat_return
+    )
 
 
 def test_chat_prints_answer_labeled_with_engagement_and_draft_disclaimer(monkeypatch):
@@ -462,7 +466,7 @@ def test_chat_answers_even_when_nothing_retrieved(monkeypatch):
     chat_result = ChatRetrievalResult(customer_chunks=[], baseline_chunks=[], private_chunks=[])
     chat_called = {"value": False}
 
-    def fake_chat_messages(messages, response_format=None):
+    def fake_chat_messages(messages, response_format=None, **kwargs):
         chat_called["value"] = True
         return "The indexed material doesn't cover that."
 
@@ -507,7 +511,7 @@ def _prompt() -> AssembledPrompt:
 def test_run_conversation_returns_immediately_when_no_followup_needed(monkeypatch):
     calls = []
 
-    def fake_chat_messages(messages, response_format=None):
+    def fake_chat_messages(messages, response_format=None, **kwargs):
         calls.append(list(messages))
         return _final_reply("# SI-5\n\nFinal response.")
 
@@ -550,7 +554,7 @@ def test_run_conversation_asks_once_then_returns_final_answer(monkeypatch, tmp_p
     )
     calls = []
 
-    def fake_chat_messages(messages, response_format=None):
+    def fake_chat_messages(messages, response_format=None, **kwargs):
         calls.append(list(messages))
         return next(replies)
 
@@ -580,7 +584,7 @@ def test_run_conversation_forces_completion_when_budget_exhausted(monkeypatch):
     chat_call_count = {"value": 0}
     prompt_call_count = {"value": 0}
 
-    def fake_chat_messages(messages, response_format=None):
+    def fake_chat_messages(messages, response_format=None, **kwargs):
         chat_call_count["value"] += 1
         return next(replies)
 
@@ -615,7 +619,7 @@ def test_run_conversation_tracked_retries_once_on_blank_response(monkeypatch):
     replies = iter([_final_reply(""), _final_reply("actual content")])
     calls = []
 
-    def fake_chat_messages(messages, response_format=None):
+    def fake_chat_messages(messages, response_format=None, **kwargs):
         calls.append(list(messages))
         return next(replies)
 
@@ -631,7 +635,7 @@ def test_run_conversation_tracked_retries_once_on_blank_response(monkeypatch):
 def test_run_conversation_tracked_gives_up_after_one_blank_retry(monkeypatch):
     calls = []
 
-    def fake_chat_messages(messages, response_format=None):
+    def fake_chat_messages(messages, response_format=None, **kwargs):
         calls.append(list(messages))
         return _final_reply("")
 
@@ -645,7 +649,7 @@ def test_run_conversation_tracked_gives_up_after_one_blank_retry(monkeypatch):
 
 def test_run_conversation_tracked_reports_no_forced_completion_on_first_try(monkeypatch):
     monkeypatch.setattr(
-        cli, "chat_messages", lambda messages, response_format=None: _final_reply("body")
+        cli, "chat_messages", lambda messages, response_format=None, **kwargs: _final_reply("body")
     )
 
     outcome = cli._run_conversation_tracked(_prompt())
@@ -656,7 +660,9 @@ def test_run_conversation_tracked_reports_no_forced_completion_on_first_try(monk
 
 def test_run_conversation_tracked_reports_forced_completion_flag(monkeypatch):
     replies = iter([_followup_reply("what SIEM?"), _final_reply("best effort body")])
-    monkeypatch.setattr(cli, "chat_messages", lambda messages, response_format=None: next(replies))
+    monkeypatch.setattr(
+        cli, "chat_messages", lambda messages, response_format=None, **kwargs: next(replies)
+    )
 
     outcome = cli._run_conversation_tracked(_prompt(), max_followups=0)
 
@@ -673,7 +679,7 @@ def test_run_conversation_respects_explicit_max_followups_override_independent_o
     replies = iter([_followup_reply("what SIEM?"), _final_reply("best effort body")])
     calls = []
 
-    def fake_chat_messages(messages, response_format=None):
+    def fake_chat_messages(messages, response_format=None, **kwargs):
         calls.append(list(messages))
         return next(replies)
 
@@ -699,7 +705,7 @@ def test_run_conversation_forced_completion_message_included_in_final_call(monke
     )
     calls = []
 
-    def fake_chat_messages(messages, response_format=None):
+    def fake_chat_messages(messages, response_format=None, **kwargs):
         calls.append(list(messages))
         return next(replies)
 

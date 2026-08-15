@@ -37,9 +37,9 @@ Security Response Generator (`srg`) is a local CLI that drafts NIST SP
 
 ## Supported platforms
 
-SRG has been tested only on Ubuntu 22.04. It is not compatible with native
-Windows, but it can run within WSL2. MacOS may be compatible but has not yet
-been tested.
+SRG has been tested on Ubuntu 22.04 and on an Apple Silicon Mac (M1 MacBook
+Pro, 16GB unified memory, macOS Tahoe). It is not compatible with native
+Windows, but it can run within WSL2.
 
 ## Install
 

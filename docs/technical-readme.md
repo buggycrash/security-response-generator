@@ -491,6 +491,59 @@ shift results:
 SRG_GEN_TEMPERATURE=0 SRG_GEN_SEED=7 srg generate SI-5
 ```
 
+## Benchmarking / finding slow phases
+
+`srg benchmark CONTROL_ID [CONTROL_ID ...]` times every phase of control
+response generation against the active engagement's already-ingested data, to
+help identify which phase is worth optimizing on your hardware. It's a
+diagnostic/dev tool: it prints Rich tables to stdout and writes nothing to
+disk, requires a running local Ollama daemon and an ingested active
+engagement (`srg ingest`), and never prompts interactively (it always runs
+non-interactively, like `bulk-generate`).
+
+```bash
+srg benchmark SI-5
+srg benchmark SI-5 --review              # include the two review/revision passes
+srg benchmark SI-5 AC-2 --iterations 3   # repeat each control back-to-back
+```
+
+For each run it reports, per phase: the embedding call, each Chroma
+collection query (plus a Chroma total), the generation call(s), and (with
+`--review`) the reviewer calls and their revision calls -- both wall-clock
+time and, for every Ollama call, the server's own reported breakdown
+(`load_duration`, `prompt_eval_duration`, `eval_duration`, token counts).
+`load_duration` is the most useful column for diagnosing unexpected slowness:
+a warm, already-resident model's `load_duration` is near-zero, while a
+multi-second `load_duration` means Ollama loaded (or reloaded) that model for
+that call. A "Cold?" flag marks calls whose `load_duration` looks like a
+model load rather than a warm reuse.
+
+`--review` is the most informative scenario to test, because a review pass
+(also used unconditionally by `bulk-generate`) alternates between the
+generation and reviewer models up to four times per control
+(`chat`(gen) → `review`(reviewer) → `chat`(gen) → `review`(reviewer) →
+`chat`(gen)). If the benchmark's findings section reports a later call to a
+model showing a cold-sized `load_duration` even though that same model
+already ran warm earlier in the same request, that's a sign Ollama may be
+evicting and reloading models on every swap rather than keeping both
+resident -- worth investigating if you have VRAM headroom to spare (see
+"Responses are much slower than expected" in
+[Troubleshooting](#troubleshooting)).
+
+To test whether keeping more models resident at once helps, restart Ollama
+with a higher `OLLAMA_MAX_LOADED_MODELS` and compare benchmark reports
+before/after. This can't be done automatically from inside `srg benchmark`,
+since the daemon is a background service you may depend on elsewhere and the
+setting only takes effect at `ollama serve` startup:
+
+```bash
+# stop however you started it (e.g. Ctrl-C the terminal running `ollama serve`,
+# or `pkill ollama` if it was started in the background)
+export OLLAMA_MAX_LOADED_MODELS=2   # or higher; try a couple of values
+ollama serve &
+srg benchmark SI-5 --review
+```
+
 ## Technology Stack
 
 - **Language**: Python
@@ -693,7 +746,11 @@ security-response-generator/
   whether the model is fully on GPU or partially spilled to system RAM/CPU
   (Ollama does this automatically and silently if VRAM is tight, and it's a
   common source of unexplained slowness). Lowering context length or closing
-  other GPU-heavy applications usually resolves it.
+  other GPU-heavy applications usually resolves it. For a detailed per-phase,
+  per-call breakdown -- including whether Ollama is reloading models between
+  the generation and reviewer models on every swap -- run
+  `srg benchmark <control-id> --review`; see
+  [Benchmarking / finding slow phases](#benchmarking--finding-slow-phases).
 - **`srg ingest` fails with `ResponseError: ... EOF` on a large document**
   (for example, the full NIST SP 800-53 catalog): this is the
   embedding model's runner subprocess getting OOM-killed — check Ollama's

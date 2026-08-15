@@ -1,6 +1,8 @@
 """Command-line interface for security-response-generator."""
 
 import re
+import time
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -10,7 +12,7 @@ import typer
 from rich.console import Console
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeElapsedColumn
 
-from security_response_generator import config, engagements
+from security_response_generator import benchmark, config, engagements
 from security_response_generator.generation import bulk_csv
 from security_response_generator.generation.formatting import normalize_to_ascii
 from security_response_generator.generation.prompt import (
@@ -23,7 +25,11 @@ from security_response_generator.generation.prompt import (
     assemble_prompt,
     parse_model_reply,
 )
-from security_response_generator.generation.retrieval import retrieve_for_chat, retrieve_for_control
+from security_response_generator.generation.retrieval import (
+    RetrievalTiming,
+    retrieve_for_chat,
+    retrieve_for_control,
+)
 from security_response_generator.generation.review import (
     REVIEW_SCHEMA,
     assemble_review_messages,
@@ -286,12 +292,23 @@ def _generate_control_response(
     output_format: OutputFormat,
     max_followups: int | None,
     review: bool,
+    *,
+    on_retrieval_timing: Callable[[RetrievalTiming], None] | None = None,
+    on_embed_response: Callable[[Mapping], None] | None = None,
+    on_generation_response: Callable[[Mapping], None] | None = None,
+    on_review_response: Callable[[Mapping], None] | None = None,
 ) -> ControlGenerationResult:
     """Run retrieval + generation for one control. Reused by `generate` (which
     treats a missing baseline match as fatal) and `bulk-generate` (which
     instead writes a note into that control's own output file).
     """
-    result = retrieve_for_control(control_id, context, collections)
+    result = retrieve_for_control(
+        control_id,
+        context,
+        collections,
+        on_timing=on_retrieval_timing,
+        on_embed_response=on_embed_response,
+    )
 
     if not result.has_baseline_match:
         note = (
@@ -313,7 +330,14 @@ def _generate_control_response(
         output_format=output_format,
     )
 
-    outcome = _run_conversation_tracked(prompt, output_format, max_followups, review=review)
+    outcome = _run_conversation_tracked(
+        prompt,
+        output_format,
+        max_followups,
+        review=review,
+        on_generation_response=on_generation_response,
+        on_review_response=on_review_response,
+    )
     response_text = outcome.text
     if not result.has_customer_match:
         # The generator is never asked to determine or state this itself (small
@@ -530,6 +554,100 @@ def bulk_generate(
     _show_demo_reminder(engagement)
 
 
+@app.command("benchmark")
+def benchmark_command(
+    control_ids: list[str] = typer.Argument(
+        ..., help="Control ID(s) to benchmark, e.g. SI-5 AC-2."
+    ),
+    iterations: int = typer.Option(
+        1,
+        "--iterations",
+        "-n",
+        min=1,
+        help=(
+            "Repeat each control back-to-back, to see whether later calls reuse an "
+            "already-loaded model."
+        ),
+    ),
+    review: bool = typer.Option(
+        False,
+        "--review/--no-review",
+        help="Include the two review/revision passes (off by default, matching `generate`).",
+    ),
+    context: str = typer.Option(
+        "", "--context", help="Freeform analyst context applied to every benchmarked control."
+    ),
+) -> None:
+    """Time every phase of control-response generation against the active
+    engagement's already-ingested data, to find which phase(s) are worth
+    optimizing.
+
+    Diagnostic/dev tool: prints Rich tables to stdout and writes nothing to
+    disk. Requires a running local Ollama daemon and an ingested active
+    engagement (`srg ingest`). Never asks follow-up questions (always runs
+    non-interactively, like `bulk-generate`).
+    """
+    engagement = _active_engagement_or_exit()
+
+    load_start = time.perf_counter()
+    collections = _build_collections(engagement)
+    collection_load_seconds = time.perf_counter() - load_start
+
+    if collections[config.COLLECTION_KNOWLEDGE_BASE].count() == 0:
+        typer.echo(
+            "The NIST knowledge base has no ingested content — run `srg ingest` first.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    report = benchmark.BenchmarkReport(collection_load_seconds=collection_load_seconds)
+    # The report table has many columns (label, model, four durations, two token
+    # counts, cold-load flag) -- render it wide rather than truncating cell text to
+    # fit an assumed terminal width, since a diagnostic report is only useful if its
+    # numbers are intact (redirect to a file or scroll horizontally if needed).
+    stdout_console = Console(width=200)
+
+    for control_id in control_ids:
+        for iteration in range(1, iterations + 1):
+            recorder = benchmark.Recorder()
+            run_start = time.perf_counter()
+            try:
+                with console.status(f"Benchmarking {control_id} ({iteration}/{iterations})..."):
+                    result = _generate_control_response(
+                        control_id,
+                        context,
+                        collections,
+                        engagement,
+                        OutputFormat.markdown,
+                        max_followups=0,
+                        review=review,
+                        on_retrieval_timing=recorder.on_retrieval_timing,
+                        on_embed_response=recorder.on_embed_response,
+                        on_generation_response=recorder.on_generation_response,
+                        on_review_response=recorder.on_review_response,
+                    )
+            except _SYSTEMIC_ERRORS as exc:
+                console.print(
+                    f"[red]Aborted during {control_id} (iteration {iteration}): {exc}[/red]"
+                )
+                if report.runs:
+                    benchmark.render_report(report, stdout_console)
+                raise typer.Exit(code=1) from exc
+
+            report.runs.append(
+                benchmark.build_run_timing(
+                    control_id,
+                    iteration,
+                    time.perf_counter() - run_start,
+                    recorder,
+                    forced_completion=result.forced_completion,
+                    has_baseline_match=result.has_baseline_match,
+                )
+            )
+
+    benchmark.render_report(report, stdout_console)
+
+
 @app.command("create-engagement")
 def create_engagement_command(
     name: str = typer.Argument(..., help="Engagement slug, e.g. virginia or acme-health."),
@@ -601,13 +719,25 @@ def _show_demo_reminder(engagement: engagements.Engagement) -> None:
         )
 
 
-def _wait_for_model(messages: list[dict], label: str = "Thinking...") -> str:
+def _wait_for_model(
+    messages: list[dict],
+    label: str = "Thinking...",
+    *,
+    on_response: Callable[[Mapping], None] | None = None,
+) -> str:
     """Call chat_messages with a spinner so a multi-minute wait doesn't look hung."""
     with console.status(label):
-        return chat_messages(messages, response_format=RESPONSE_SCHEMA)
+        return chat_messages(messages, response_format=RESPONSE_SCHEMA, on_response=on_response)
 
 
-def _review_and_revise(prompt: AssembledPrompt, messages: list[dict], draft: str) -> str:
+def _review_and_revise(
+    prompt: AssembledPrompt,
+    messages: list[dict],
+    draft: str,
+    *,
+    on_generation_response: Callable[[Mapping], None] | None = None,
+    on_review_response: Callable[[Mapping], None] | None = None,
+) -> str:
     """Run two reviewer critiques, each followed by a generator revision."""
     candidate = draft
     for pass_number in (1, 2):
@@ -620,6 +750,7 @@ def _review_and_revise(prompt: AssembledPrompt, messages: list[dict], draft: str
             raw_critique = review_messages(
                 assemble_review_messages(prompt, candidate, messages[2:]),
                 response_format=REVIEW_SCHEMA,
+                on_response=on_review_response,
             )
         critique = parse_critique(raw_critique)
         messages.append({"role": "assistant", "content": candidate})
@@ -632,6 +763,7 @@ def _review_and_revise(prompt: AssembledPrompt, messages: list[dict], draft: str
         candidate = _wait_for_model(
             messages,
             "Finalizing..." if pass_number == 2 else "Revising draft...",
+            on_response=on_generation_response,
         )
     return candidate
 
@@ -670,6 +802,8 @@ def _run_conversation_tracked(
     max_followups: int | None = None,
     *,
     review: bool = False,
+    on_generation_response: Callable[[Mapping], None] | None = None,
+    on_review_response: Callable[[Mapping], None] | None = None,
 ) -> ConversationOutcome:
     """Run the generation call, handling up to max_followups (or
     config.MAX_FOLLOWUP_TURNS if not given) interactive clarifying questions
@@ -692,7 +826,7 @@ def _run_conversation_tracked(
     blank_retry_available = True
 
     while True:
-        raw_reply = _wait_for_model(messages)
+        raw_reply = _wait_for_model(messages, on_response=on_generation_response)
         reply = parse_model_reply(raw_reply)
         if not reply.needs_info:
             if _is_blank_response(reply.response) and blank_retry_available:
@@ -700,15 +834,37 @@ def _run_conversation_tracked(
                 messages.append({"role": "assistant", "content": raw_reply})
                 messages.append({"role": "user", "content": BLANK_RESPONSE_RETRY_INSTRUCTION})
                 continue
-            final_reply = _review_and_revise(prompt, messages, raw_reply) if review else raw_reply
+            final_reply = (
+                _review_and_revise(
+                    prompt,
+                    messages,
+                    raw_reply,
+                    on_generation_response=on_generation_response,
+                    on_review_response=on_review_response,
+                )
+                if review
+                else raw_reply
+            )
             return ConversationOutcome(_render_final_reply(final_reply, output_format), False)
 
         messages.append({"role": "assistant", "content": raw_reply})
 
         if followups_remaining <= 0:
             messages.append({"role": "user", "content": FORCED_COMPLETION_INSTRUCTION})
-            raw_reply = _wait_for_model(messages, "Wrapping up...")
-            final_reply = _review_and_revise(prompt, messages, raw_reply) if review else raw_reply
+            raw_reply = _wait_for_model(
+                messages, "Wrapping up...", on_response=on_generation_response
+            )
+            final_reply = (
+                _review_and_revise(
+                    prompt,
+                    messages,
+                    raw_reply,
+                    on_generation_response=on_generation_response,
+                    on_review_response=on_review_response,
+                )
+                if review
+                else raw_reply
+            )
             return ConversationOutcome(_render_final_reply(final_reply, output_format), True)
 
         typer.echo(f"\n{reply.question}\n")
