@@ -91,7 +91,7 @@ Use a name that combines the governing state and system name:
 srg create-engagement northbridge-SALI
 ```
 
-The fictional State of Northbridge is used in tis documentation to avoid misrepresentation or misattribution to any actual State.
+The fictional State of Northbridge is used in this documentation to avoid misrepresentation or misattribution to any actual State.
 
 The command activates the engagement and prints its document locations:
 

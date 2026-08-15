@@ -322,8 +322,9 @@ def _generate_control_response(
         # it wasn't) -- SRG already knows this deterministically from retrieval,
         # so it prepends the caveat here instead.
         caveat = (
-            f"[No customer- or state-specific standard was located for {control_id}; "
-            "this response is based on the NIST 800-53 baseline alone.]"
+            f"[No customer- or state-specific standard was located for {control_id}. "
+            "This response is based on the NIST baseline and any available system "
+            "context.]"
         )
         response_text = f"{caveat}\n\n{response_text}"
     labeled = _label_response(response_text, engagement, output_format)
