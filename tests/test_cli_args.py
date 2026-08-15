@@ -195,7 +195,11 @@ def test_generate_prepends_deterministic_note_when_no_customer_standard_matched(
     result = runner.invoke(cli.app, ["generate", "SI-5"])
 
     assert result.exit_code == 0
-    assert "No customer- or state-specific standard was located for SI-5" in result.stdout
+    assert (
+        "[No customer- or state-specific standard was located for SI-5. "
+        "This response is based on the NIST baseline and any available system context.]"
+        in result.stdout
+    )
 
 
 def test_generate_omits_deterministic_note_when_customer_standard_matched(monkeypatch):

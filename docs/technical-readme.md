@@ -73,22 +73,6 @@ generation model connects the two even when the wording differs.
   updates; dropping in an arbitrary catalog or generic JSON-to-Markdown
   conversion may not preserve reliable control boundaries.
 
-## Technology Stack
-
-- **Language**: Python
-- **Generation model**: [Gemma 4 E4B
-  (QAT)](https://ollama.com/library/gemma4) via [Ollama](https://ollama.com)
-  by default — the best output quality of any locally-viable option tested,
-  in a quantized footprint that fits comfortably in 8 GB of VRAM alongside
-  the embedding model. It is swappable through `SRG_GEN_MODEL`; see
-  [Choosing a generation model](#choosing-a-generation-model) for tested
-  models and results.
-- **Reviewer model**: Gemma4 E2B QAT via Ollama by default, independently
-  swappable through `SRG_REVIEW_MODEL`
-- **Embedding model**: EmbeddingGemma via Ollama
-- **Vector store**: ChromaDB (embedded/local, no server)
-- **CLI**: [Typer](https://typer.tiangolo.com)
-
 ## Prerequisites
 
 - Permission from your customer to use this tool. Different customers have
@@ -137,182 +121,29 @@ Other setup options include `--dev`, `--dev-only`, `--skip-models`,
 details. `--dev-only` prepares the test environment and Git hook without
 touching the command launcher, Ollama, or models.
 
-## Cleanup
+## Customer engagements
 
-Run `./cleanup.sh` to remove the launcher owned by the current checkout and
-the configured generation and embedding models. Because Ollama models are
-shared and setup does not record whether a model predated SRG, review the
-preview carefully or pass `--keep-models`. Cleanup does not uninstall Ollama,
-stop its daemon, remove the project virtual environment, or delete the shared
-NIST index.
-
-Setup never edits shell profiles. Cleanup therefore prints the exact `PATH`
-line to remove manually rather than modifying a profile it does not own.
-
-Engagement data is retained unless `--wipe-engagements` is supplied. That
-option requires both the explicit flag and a second exact typed confirmation;
-it deletes customer engagements, local active-engagement state, and generated
-demo data while preserving the committed fictional demo seed files.
-
-## Choosing a generation model
-
-> [!WARNING]
-> Model weights are not included in this source repository and are not
-> covered by its MIT License. Running `./setup.sh` without `--skip-models`
-> downloads them into Ollama's local model storage, where they become
-> separately licensed runtime components of the installed project. The
-> default generation and reviewer models are governed by the
-> [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0); the
-> default embedding model is governed by the
-> [Gemma Terms of Use](https://ai.google.dev/gemma/terms). See
-> [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
-
-The default, `gemma4:e4b-it-qat`, was selected after direct comparisons on
-SRG's retrieval and generation workload against every other model in the
-table below — it produced the best output quality and alignment of any
-locally-viable option tested, in a quantized footprint that fits comfortably
-alongside `embeddinggemma`. It remains a compromise, though: on complex
-controls it can still omit or misunderstand relevant context even when
-retrieval supplied the correct material. Every generated response is
-therefore a draft requiring human review.
-
-See [Examples of SRG model use](Examples-of-SRG-use.md) for the aforementioned table and side-by-side
-outputs from the default model and considered alternatives using identical
-prompts.
-
-`gemma4:e4b-it-qat` is a quantization-aware-trained (QAT) build of Google's
-Gemma 4 E4B, part of a multimodal model family that still carries unused
-vision/audio encoders this tool never exercises. QAT quantization is what
-brings its resident footprint down to well under 7 GB, letting it coexist
-with `embeddinggemma` on an 8 GB card without the evict-and-reload cycling
-that tighter-fitting models can trigger on every `srg generate` call. See
-"Responses are much slower than expected" in
-[Troubleshooting](#troubleshooting) for symptoms and mitigations.
-
-**[Phi-4-mini](https://ollama.com/library/phi4-mini)** (Microsoft) was tested
-because its approximately 3.8B parameters and 2.5 GB download make it
-attractive for constrained hardware. It is not sufficient for SRG's
-generation workload and should not be used for control responses. Across
-repeated identical prompts, it produced inconsistent output, omitted explicit
-analyst context, drifted from the requested control, and generated validation
-suggestions unrelated to its claims. Those are model-capability failures, not
-retrieval failures. `gemma4:e4b-it-qat` is the minimum recommended local
-generation model; if your hardware cannot run it, SRG does not currently
-offer a suitable smaller fallback.
-
-The plain **[Gemma 4 E4B](https://ollama.com/library/gemma4)** (non-QAT) tag
-was also tested and produced very good alignment and prose — but at roughly
-9.6 GB, its footprint sits at the edge of what's available on a 12 GB card
-alongside `embeddinggemma`, making it prone to VRAM-eviction cycling in
-testing. The QAT build now used as the default achieves essentially the same
-quality for meaningfully less VRAM, so the plain tag isn't recommended over
-it; it's only worth considering if you have significantly more VRAM
-available (roughly 16 GB or more) and want to rule out any possible
-QAT-related quality difference yourself.
-
-Switch models with the `SRG_GEN_MODEL` environment variable — no code
-changes needed, since `srg` talks to Ollama's generic chat API regardless
-of which model is behind it:
+Customer documents and indexes are isolated under `engagements/<state name>-<system name>/`.
+The NIST baseline remains shared and is not duplicated for each customer.
 
 ```bash
-ollama pull llama3.1:8b
-SRG_GEN_MODEL=llama3.1:8b srg generate SI-5 --context "..."
+srg create-engagement northbridge-SALI  # creates and activates it
+srg show-engagement                     # shows active folders
+srg list-engagements
+srg use-engagement demo
+srg use-engagement northbridge-SALI
 ```
 
-To make a switch permanent for your own sessions, export `SRG_GEN_MODEL` in
-your shell profile.
+Creating an engagement makes empty `customer_standards/`, `private_context/`,
+`chroma_db/`, and `responses/` folders. Copy the applicable starter files
+from `example_files/` into the paths printed by `create-engagement`, add
+private context, and run `srg ingest`. Switching engagements changes which
+customer/private index is queried; it does not delete or modify either
+customer's files.
 
-When review is active, the pipeline uses `gemma4:e2b-it-qat` by default,
-matching the generation model's family. Review is automatic for
-`bulk-generate` and opt-in with `srg generate --review`. Override the
-reviewer model independently:
-
-```bash
-ollama pull llama3.1:8b
-SRG_REVIEW_MODEL=llama3.1:8b srg generate SI-5 --context "..."
-```
-
-Local open-weight model quality is a fast-moving target — new and improved
-releases show up often enough that today's defaults shouldn't be treated as
-permanent. It's worth periodically re-testing both the generation and
-reviewer model choices against your own prompts and hardware as new models
-become available.
-
-After each generation request, SRG asks Ollama to keep the generation model
-loaded for 20 minutes to make subsequent runs faster. `embeddinggemma` is
-kept loaded for that same duration by default, since it's invoked on every
-`generate` and `chat` call for retrieval and has its own non-trivial load
-time. The reviewer uses the same duration by default. Override durations
-independently with `SRG_GEN_KEEP_ALIVE`, `SRG_REVIEW_KEEP_ALIVE`, and
-`SRG_EMBED_KEEP_ALIVE`, using an Ollama duration such as `30m` or `1h`:
-
-```bash
-SRG_GEN_KEEP_ALIVE=30m srg generate SI-5
-SRG_REVIEW_KEEP_ALIVE=30m srg generate SI-5
-SRG_EMBED_KEEP_ALIVE=30m srg generate SI-5
-```
-
-Generation requests use a fixed `seed` of `42` by default for reproducible
-output across runs; override it with `SRG_GEN_SEED` if you want varied
-output. `temperature` is left unset by default, so the generation model's
-own Modelfile default applies, or Ollama's if the model does not provide. Some models show wild output variance at non-default
-temperatures, so this stays opt-in via `SRG_GEN_TEMPERATURE` rather than
-being forced. Note that seed alone doesn't guarantee identical output
-run-to-run, since floating-point variance in the model runner can still
-shift results:
-
-```bash
-SRG_GEN_TEMPERATURE=0 SRG_GEN_SEED=7 srg generate SI-5
-```
-
-The interactive follow-up-question feature (see
-[Interactive follow-up questions](#interactive-follow-up-questions)) is
-enforced via Ollama's structured-output/JSON-schema support rather than a
-free-form response protocol. This keeps reply parsing consistent across
-models, although the accuracy and completeness of the generated content
-still depend on the selected model.
-
-The embedding model (`embeddinggemma`) is a separate, much smaller model
-used only for retrieval, and typically doesn't need to change when you swap
-the generation model.
-
-### Using a customer-approved cloud gateway (for example, AWS Bedrock)
-
-Everything above assumes local models because most engagements haven't
-pre-approved sending customer or system data to any external service (see
-[Prerequisites](#prerequisites) and
-[Security & Privacy](#security--privacy)). That default flips for a specific,
-common situation: a customer that already provides AWS Bedrock as their own
-sanctioned interface to a set of approved models. In that case, routing
-generation through the customer's Bedrock endpoint isn't sending data to an
-arbitrary third party — it stays inside a boundary the customer has already
-vetted, under whatever data-handling terms they negotiated with AWS. If
-that's your situation, it can be a reasonable choice, and often a better
-one: Bedrock exposes larger, frontier-class models than what's practical to
-run locally on constrained hardware, which can mean meaningfully more
-nuanced, better-grounded responses than the supported local options above.
-
-A few things worth confirming before doing this on any given engagement:
-
-- Get it in writing the same way you would any other AI usage on the
-  engagement — Bedrock accounts and configurations vary (region, logging/
-  retention via CloudTrail, cross-region inference, per-model-provider data
-  terms), and "the customer approved Bedrock" doesn't automatically cover
-  every model or setting available through it.
-- Retrieval and embedding (`embeddinggemma`) would stay local exactly as
-  today — this only changes where the assembled prompt for the
-  *generation* step gets sent, the same distinction as choosing between
-  local models above.
-
-This isn't implemented today — `llm/ollama_client.py`'s `chat_messages()`
-is currently the only function that talks to a generation model, and it
-assumes Ollama's chat API. Adding Bedrock support would mean a parallel
-client (for example, via `boto3`'s `bedrock-runtime` Converse API) behind a
-provider switch, plus reimplementing the JSON-schema structured-output
-contract used for the
-[interactive follow-up mechanism](#interactive-follow-up-questions) against
-Bedrock's equivalent. It's noted here as a legitimate option worth knowing
-about, not a decision this tool makes for you.
+If DEMO is active after you have already created an engagement, run
+`srg list-engagements` and then `srg use-engagement <engagement-name>` to
+select it.
 
 ## Usage
 
@@ -545,48 +376,136 @@ the facts unique to the current control, and then use the strongest supported
 model your hardware can run. More capable generation improves interpretation;
 it does not remove the need for grounded inputs or human review of the draft.
 
-## Customer engagements
+## Choosing a generation model
 
-Customer documents and indexes are isolated under `engagements/<state name>-<system name>/`.
-The NIST baseline remains shared and is not duplicated for each customer.
+> [!WARNING]
+> Model weights are not included in this source repository and are not
+> covered by its MIT License. Running `./setup.sh` without `--skip-models`
+> downloads them into Ollama's local model storage, where they become
+> separately licensed runtime components of the installed project. The
+> default generation and reviewer models are governed by the
+> [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0); the
+> default embedding model is governed by the
+> [Gemma Terms of Use](https://ai.google.dev/gemma/terms). See
+> [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
+
+The default, `gemma4:e4b-it-qat`, was selected after direct comparisons on
+SRG's retrieval and generation workload against every other model in the
+table at [Examples of SRG model use](Examples-of-SRG-use.md) — it produced the best output quality and alignment of any
+locally-viable option tested, in a quantized footprint that fits comfortably
+alongside `embeddinggemma`. It remains a compromise, though: on complex
+controls it may still omit or misunderstand relevant context even when
+retrieval supplied the correct material. Every generated response is
+therefore a draft requiring human review.
+
+`gemma4:e4b-it-qat` is a quantization-aware-trained (QAT) build of Google's
+Gemma 4 E4B, part of a multimodal model family that still carries unused
+vision/audio encoders this tool never exercises. QAT quantization is what
+brings its resident footprint down to well under 7 GB, letting it coexist
+with `embeddinggemma` on an 8 GB card without the evict-and-reload cycling
+that tighter-fitting models can trigger on every `srg generate` call. See
+"Responses are much slower than expected" in
+[Troubleshooting](#troubleshooting) for symptoms and mitigations.
+
+**[Phi-4-mini](https://ollama.com/library/phi4-mini)** (Microsoft) was tested
+because its approximately 3.8B parameters and 2.5 GB download make it
+attractive for constrained hardware. It is not sufficient for SRG's
+generation workload and should not be used for control responses. Across
+repeated identical prompts, it produced inconsistent output, omitted explicit
+analyst context, drifted from the requested control, and generated validation
+suggestions unrelated to its claims. Those are model-capability failures, not
+retrieval failures. `gemma4:e4b-it-qat` is the minimum recommended local
+generation model; if your hardware cannot run it, SRG does not currently
+offer a suitable smaller fallback.
+
+The plain **[Gemma 4 E4B](https://ollama.com/library/gemma4)** (non-QAT) tag
+was also tested and produced very good alignment and prose — but at roughly
+9.6 GB, its footprint sits at the edge of what's available on a 12 GB card
+alongside `embeddinggemma`, making it prone to VRAM-eviction cycling in
+testing. The QAT build now used as the default achieves essentially the same
+quality for meaningfully less VRAM, so the plain tag isn't recommended over
+it.
+
+See [Examples of SRG model use](Examples-of-SRG-use.md) for  side-by-side
+outputs from the default model and considered alternatives using identical
+prompts.
+
+Switch models with the `SRG_GEN_MODEL` environment variable — no code
+changes needed, since `srg` talks to Ollama's generic chat API regardless
+of which model is behind it:
 
 ```bash
-srg create-engagement northbridge-SALI  # creates and activates it
-srg show-engagement                     # shows active folders
-srg list-engagements
-srg use-engagement demo
-srg use-engagement northbridge-SALI
+ollama pull llama3.1:8b
+SRG_GEN_MODEL=llama3.1:8b srg generate SI-5 --context "..."
 ```
 
-Creating an engagement makes empty `customer_standards/`, `private_context/`,
-`chroma_db/`, and `responses/` folders. Copy the applicable starter files
-from `example_files/` into the paths printed by `create-engagement`, add
-private context, and run `srg ingest`. Switching engagements changes which
-customer/private index is queried; it does not delete or modify either
-customer's files.
+To make a switch permanent for your own sessions, export `SRG_GEN_MODEL` in
+your shell profile.
 
-If DEMO is active after you have already created an engagement, run
-`srg list-engagements` and then `srg use-engagement <engagement-name>` to
-select it.
-
-## Development
+When review is active, the pipeline uses `gemma4:e2b-it-qat` by default,
+matching the generation model's family. Review is automatic for
+`bulk-generate` and opt-in with `srg generate --review`. Override the
+reviewer model independently:
 
 ```bash
-./setup.sh --dev-only            # install dev dependencies and enable Git hooks
-.venv/bin/pytest               # run tests
-.venv/bin/ruff check .          # lint
-.venv/bin/ruff format --check . # verify formatting
+ollama pull llama3.1:8b
+SRG_REVIEW_MODEL=llama3.1:8b srg generate SI-5 --context "..."
 ```
 
-See [CONTRIBUTING.md](../CONTRIBUTING.md) for the complete contribution
-workflow. GitHub Actions runs the same lint, formatting, and test checks on
-pull requests and pushes to `main`.
+The embedding model (`embeddinggemma`) is a separate, much smaller model
+used only for retrieval, and typically doesn't need to change when you swap
+the generation model.  Other embedding models exists, but none were tested.  
 
-Most of the pipeline (chunking, manifest diffing, prompt assembly, retrieval
-merge logic, CLI argument parsing) is unit-tested without needing a live
-Ollama instance. Actual embedding/retrieval quality and generation output
-require a live Ollama daemon with both models pulled and are verified
-manually — see the "Manual verification" section below.
+Local open-weight model quality is a fast-moving target — new and improved
+releases show up often enough that today's defaults shouldn't be treated as
+permanent. It's worth periodically re-testing both the generation and
+reviewer model choices against your own prompts and hardware as new models
+become available.
+
+## Keep_alive, temperature, and seed
+
+After each generation request, SRG asks Ollama to keep the generation model
+loaded for 20 minutes to make subsequent runs faster. `embeddinggemma` is
+kept loaded for that same duration by default, since it's invoked on every
+`generate` and `chat` call for retrieval and has its own non-trivial load
+time. The reviewer uses the same duration by default. Override durations
+independently with `SRG_GEN_KEEP_ALIVE`, `SRG_REVIEW_KEEP_ALIVE`, and
+`SRG_EMBED_KEEP_ALIVE`, using an Ollama duration such as `30m` or `1h`:
+
+```bash
+SRG_GEN_KEEP_ALIVE=30m srg generate SI-5
+SRG_REVIEW_KEEP_ALIVE=30m srg generate SI-5
+SRG_EMBED_KEEP_ALIVE=30m srg generate SI-5
+```
+
+Generation requests use a fixed `seed` of `42` by default for reproducible
+output across runs; override it with `SRG_GEN_SEED` if you want varied
+output. `temperature` is left unset by default, so the generation model's
+own Modelfile default applies, or Ollama's if the model does not provide. Some models show wild output variance at non-default
+temperatures, so this stays opt-in via `SRG_GEN_TEMPERATURE` rather than
+being forced. Note that seed alone doesn't guarantee identical output
+run-to-run, since floating-point variance in the model runner can still
+shift results:
+
+```bash
+SRG_GEN_TEMPERATURE=0 SRG_GEN_SEED=7 srg generate SI-5
+```
+
+## Technology Stack
+
+- **Language**: Python
+- **Generation model**: [Gemma 4 E4B
+  (QAT)](https://ollama.com/library/gemma4) via [Ollama](https://ollama.com)
+  by default — the best output quality of any locally-viable option tested,
+  in a quantized footprint that fits comfortably in 8 GB of VRAM alongside
+  the embedding model. It is swappable through `SRG_GEN_MODEL`; see
+  [Choosing a generation model](#choosing-a-generation-model) for tested
+  models and results.
+- **Reviewer model**: Gemma4 E2B QAT via Ollama by default, independently
+  swappable through `SRG_REVIEW_MODEL`
+- **Embedding model**: EmbeddingGemma via Ollama
+- **Vector store**: ChromaDB (embedded/local, no server)
+- **CLI**: [Typer](https://typer.tiangolo.com)
 
 ## How It Works
 
@@ -704,6 +623,24 @@ baseline, and for larger jurisdictions the customer-standards material
 itself — can each individually exceed what any locally-run model's context
 window can hold.
 
+## Security & Privacy
+
+- Customer engagement folders are gitignored, including their standards,
+  private context, indexes, and generated responses. Only the explicitly
+  fictional `engagements/demo/` seed files are committed.
+- The Python client is pinned to Ollama at `127.0.0.1:11434`; an
+  `OLLAMA_HOST` environment override cannot redirect SRG to a remote server.
+- SRG rejects Ollama model tags ending in `cloud` or `-cloud` before sending
+  document or prompt content.
+- Every Ollama CLI call made by the setup script or launcher is pinned to
+  loopback. Any Ollama daemon started by SRG has cloud features disabled
+  with `OLLAMA_NO_CLOUD=1`.
+- Chroma is created with `anonymized_telemetry=False`, disabling its product
+  telemetry.
+- `srg update-nist` is an explicit exception to otherwise local document
+  processing: it connects to the configured HTTPS OSCAL source and writes
+  only the converted catalog to the selected output path. It does not send
+  customer standards, private context, prompts, or generated responses.
 ## File Structure
 
 ```
@@ -770,26 +707,41 @@ security-response-generator/
   SRG_EMBED_BATCH_SIZE=8 srg ingest
   ```
 
-## Security & Privacy
+## Cleanup
 
-- Customer engagement folders are gitignored, including their standards,
-  private context, indexes, and generated responses. Only the explicitly
-  fictional `engagements/demo/` seed files are committed.
-- The Python client is pinned to Ollama at `127.0.0.1:11434`; an
-  `OLLAMA_HOST` environment override cannot redirect SRG to a remote server.
-- SRG rejects Ollama model tags ending in `cloud` or `-cloud` before sending
-  document or prompt content.
-- Every Ollama CLI call made by the setup script or launcher is pinned to
-  loopback. Any Ollama daemon started by SRG has cloud features disabled
-  with `OLLAMA_NO_CLOUD=1`.
-- Chroma is created with `anonymized_telemetry=False`, disabling its product
-  telemetry.
-- `srg update-nist` is an explicit exception to otherwise local document
-  processing: it connects to the configured HTTPS OSCAL source and writes
-  only the converted catalog to the selected output path. It does not send
-  customer standards, private context, prompts, or generated responses.
-- The cloud-gateway discussion above describes a possible future feature.
-  The current implementation has no cloud generation provider.
+Run `./cleanup.sh` to remove the launcher owned by the current checkout and
+the configured generation and embedding models. Because Ollama models are
+shared and setup does not record whether a model predated SRG, review the
+preview carefully or pass `--keep-models`. Cleanup does not uninstall Ollama,
+stop its daemon, remove the project virtual environment, or delete the shared
+NIST index.
+
+Setup never edits shell profiles. Cleanup therefore prints the exact `PATH`
+line to remove manually rather than modifying a profile it does not own.
+
+Engagement data is retained unless `--wipe-engagements` is supplied. That
+option requires both the explicit flag and a second exact typed confirmation;
+it deletes customer engagements, local active-engagement state, and generated
+demo data while preserving the committed fictional demo seed files.
+
+## Development
+
+```bash
+./setup.sh --dev-only            # install dev dependencies and enable Git hooks
+.venv/bin/pytest               # run tests
+.venv/bin/ruff check .          # lint
+.venv/bin/ruff format --check . # verify formatting
+```
+
+See [CONTRIBUTING.md](../CONTRIBUTING.md) for the complete contribution
+workflow. GitHub Actions runs the same lint, formatting, and test checks on
+pull requests and pushes to `main`.
+
+Most of the pipeline (chunking, manifest diffing, prompt assembly, retrieval
+merge logic, CLI argument parsing) is unit-tested without needing a live
+Ollama instance. Actual embedding/retrieval quality and generation output
+require a live Ollama daemon with both models pulled and are verified
+manually — see the "Manual verification" section below.
 
 ## Manual verification
 
