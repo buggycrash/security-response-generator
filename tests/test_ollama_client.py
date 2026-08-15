@@ -111,6 +111,33 @@ def test_embed_texts_empty_input_short_circuits(monkeypatch):
     assert ollama_client.embed_texts([]) == []
 
 
+def test_embed_texts_calls_on_response_with_raw_response_per_batch(monkeypatch):
+    monkeypatch.setattr(ollama_client, "EMBED_BATCH_SIZE", 2)
+
+    def fake_embed(model, input, keep_alive):
+        return {"embeddings": [[0.0] for _ in input], "load_duration": 123}
+
+    monkeypatch.setattr(ollama_client._local_client(), "embed", fake_embed, raising=False)
+
+    responses = []
+    ollama_client.embed_texts(["a", "bb", "ccc"], on_response=responses.append)
+
+    assert len(responses) == 2
+    assert all(response["load_duration"] == 123 for response in responses)
+
+
+def test_embed_texts_on_response_not_required(monkeypatch):
+    monkeypatch.setattr(
+        ollama_client._local_client(),
+        "embed",
+        lambda model, input, keep_alive: {"embeddings": [[0.0]]},
+        raising=False,
+    )
+
+    # Should not raise when on_response is omitted.
+    assert ollama_client.embed_texts(["a"]) == [[0.0]]
+
+
 def test_embed_texts_passes_configured_keep_alive(monkeypatch):
     captured = {}
 
@@ -149,6 +176,20 @@ def test_embed_query_returns_single_vector(monkeypatch):
     )
 
     assert ollama_client.embed_query("hello") == [1.0, 2.0]
+
+
+def test_embed_query_forwards_on_response(monkeypatch):
+    monkeypatch.setattr(
+        ollama_client._local_client(),
+        "embed",
+        lambda model, input, keep_alive: {"embeddings": [[1.0]], "load_duration": 42},
+        raising=False,
+    )
+
+    captured = {}
+    ollama_client.embed_query("hello", on_response=lambda response: captured.update(response))
+
+    assert captured["load_duration"] == 42
 
 
 def test_chat_messages_calls_ollama_with_configured_model_and_raw_messages(monkeypatch):
@@ -198,6 +239,33 @@ def test_chat_messages_passes_response_format_through(monkeypatch):
     assert captured["format"] == schema
 
 
+def test_chat_messages_calls_on_response_with_raw_response(monkeypatch):
+    def fake_chat(model, messages, options, format, keep_alive):
+        return {"message": {"content": "response text"}, "load_duration": 555, "model": model}
+
+    monkeypatch.setattr(ollama_client._local_client(), "chat", fake_chat, raising=False)
+
+    captured = {}
+    ollama_client.chat_messages(
+        [{"role": "user", "content": "hi"}], on_response=lambda response: captured.update(response)
+    )
+
+    assert captured["load_duration"] == 555
+    assert captured["model"] == ollama_client.GENERATION_MODEL
+
+
+def test_chat_messages_on_response_not_required(monkeypatch):
+    monkeypatch.setattr(
+        ollama_client._local_client(),
+        "chat",
+        lambda model, messages, options, format, keep_alive: {"message": {"content": "text"}},
+        raising=False,
+    )
+
+    # Should not raise when on_response is omitted.
+    assert ollama_client.chat_messages([{"role": "user", "content": "hi"}]) == "text"
+
+
 def test_review_messages_uses_separately_configured_local_model(monkeypatch):
     captured = {}
 
@@ -221,6 +289,21 @@ def test_review_messages_uses_separately_configured_local_model(monkeypatch):
     assert captured["messages"] == messages
     assert captured["format"] == schema
     assert captured["keep_alive"] == ollama_client.REVIEW_KEEP_ALIVE
+
+
+def test_review_messages_calls_on_response_with_raw_response(monkeypatch):
+    def fake_chat(model, messages, options, format, keep_alive):
+        return {"message": {"content": '{"critique":"revise"}'}, "load_duration": 777}
+
+    monkeypatch.setattr(ollama_client._local_client(), "chat", fake_chat, raising=False)
+
+    captured = {}
+    ollama_client.review_messages(
+        [{"role": "user", "content": "review this"}],
+        on_response=lambda response: captured.update(response),
+    )
+
+    assert captured["load_duration"] == 777
 
 
 def test_chat_messages_num_ctx_respects_override(monkeypatch):
