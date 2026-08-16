@@ -230,4 +230,4 @@ def test_print_findings_flags_cold_load_after_warm_model_reuse():
     output = console.export_text()
 
     assert "may be evicting/reloading" in output
-    assert "OLLAMA_MAX_LOADED_MODELS" in output
+    assert "ollama ps" in output

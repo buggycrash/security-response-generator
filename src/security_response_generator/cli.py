@@ -3,6 +3,7 @@
 import re
 import time
 from collections.abc import Callable, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -297,6 +298,7 @@ def _generate_control_response(
     on_embed_response: Callable[[Mapping], None] | None = None,
     on_generation_response: Callable[[Mapping], None] | None = None,
     on_review_response: Callable[[Mapping], None] | None = None,
+    set_status: Callable[[str], None] | None = None,
 ) -> ControlGenerationResult:
     """Run retrieval + generation for one control. Reused by `generate` (which
     treats a missing baseline match as fatal) and `bulk-generate` (which
@@ -337,6 +339,7 @@ def _generate_control_response(
         review=review,
         on_generation_response=on_generation_response,
         on_review_response=on_review_response,
+        set_status=set_status,
     )
     response_text = outcome.text
     if not result.has_customer_match:
@@ -380,17 +383,24 @@ def generate(
 ) -> None:
     """Generate a security control response grounded in the local knowledge base."""
     engagement = _active_engagement_or_exit()
-    collections = _build_collections(engagement)
+    # A single status spans collection load, retrieval, and generation so the
+    # spinner appears immediately rather than after several silent seconds of
+    # Chroma/embedding work; the label is updated at each real phase transition.
+    with console.status("Loading engagement data...") as status:
+        set_status = _throttled_status_setter(status)
+        collections = _build_collections(engagement)
+        set_status("Retrieving context...")
 
-    result = _generate_control_response(
-        control_id,
-        context,
-        collections,
-        engagement,
-        output_format,
-        max_followups=None,
-        review=review,
-    )
+        result = _generate_control_response(
+            control_id,
+            context,
+            collections,
+            engagement,
+            output_format,
+            max_followups=None,
+            review=review,
+            set_status=set_status,
+        )
     if not result.has_baseline_match:
         typer.echo(
             f"No matching NIST baseline content found for control ID '{control_id}' — "
@@ -424,23 +434,29 @@ def chat(
 ) -> None:
     """Answer a freeform question grounded in the active engagement's indexed material."""
     engagement = _active_engagement_or_exit()
-    collections = _build_collections(engagement)
+    # A single status spans collection load, retrieval, and generation so the
+    # spinner appears immediately rather than after several silent seconds of
+    # Chroma/embedding work.
+    with console.status("Loading engagement data...") as status:
+        set_status = _throttled_status_setter(status)
+        collections = _build_collections(engagement)
+        set_status("Retrieving context...")
 
-    result = retrieve_for_chat(question, collections)
+        result = retrieve_for_chat(question, collections)
 
-    instructions = config.CHAT_INSTRUCTIONS_PATH.read_text(encoding="utf-8")
-    prompt = assemble_chat_prompt(
-        instructions=instructions,
-        question=question,
-        customer_chunks=result.customer_chunks,
-        baseline_chunks=result.baseline_chunks,
-        private_chunks=result.private_chunks,
-    )
-    messages = [
-        {"role": "system", "content": prompt.system},
-        {"role": "user", "content": prompt.user},
-    ]
-    with console.status("Thinking..."):
+        instructions = config.CHAT_INSTRUCTIONS_PATH.read_text(encoding="utf-8")
+        prompt = assemble_chat_prompt(
+            instructions=instructions,
+            question=question,
+            customer_chunks=result.customer_chunks,
+            baseline_chunks=result.baseline_chunks,
+            private_chunks=result.private_chunks,
+        )
+        messages = [
+            {"role": "system", "content": prompt.system},
+            {"role": "user", "content": prompt.user},
+        ]
+        set_status("Thinking...")
         response_text = chat_messages(messages)
 
     typer.echo()
@@ -496,7 +512,8 @@ def bulk_generate(
         raise typer.Exit(code=1) from exc
 
     engagement = _active_engagement_or_exit()
-    collections = _build_collections(engagement)
+    with console.status("Loading engagement data..."):
+        collections = _build_collections(engagement)
 
     if collections[config.COLLECTION_KNOWLEDGE_BASE].count() == 0:
         typer.echo(
@@ -590,7 +607,8 @@ def benchmark_command(
     engagement = _active_engagement_or_exit()
 
     load_start = time.perf_counter()
-    collections = _build_collections(engagement)
+    with console.status("Loading engagement data..."):
+        collections = _build_collections(engagement)
     collection_load_seconds = time.perf_counter() - load_start
 
     if collections[config.COLLECTION_KNOWLEDGE_BASE].count() == 0:
@@ -612,7 +630,12 @@ def benchmark_command(
             recorder = benchmark.Recorder()
             run_start = time.perf_counter()
             try:
-                with console.status(f"Benchmarking {control_id} ({iteration}/{iterations})..."):
+                with console.status(
+                    f"Benchmarking {control_id} ({iteration}/{iterations})..."
+                ) as status:
+                    # Deliberately not throttled: wall_seconds below spans this whole
+                    # block, and this command's job is to measure that time accurately,
+                    # not make the spinner readable.
                     result = _generate_control_response(
                         control_id,
                         context,
@@ -625,6 +648,7 @@ def benchmark_command(
                         on_embed_response=recorder.on_embed_response,
                         on_generation_response=recorder.on_generation_response,
                         on_review_response=recorder.on_review_response,
+                        set_status=status.update,
                     )
             except _SYSTEMIC_ERRORS as exc:
                 console.print(
@@ -719,14 +743,54 @@ def _show_demo_reminder(engagement: engagements.Engagement) -> None:
         )
 
 
+MIN_STATUS_DISPLAY_SECONDS = 0.8
+
+
+def _throttled_status_setter(status) -> Callable[[str], None]:
+    """Wrap a Status's update() so each label stays on screen for at least
+    MIN_STATUS_DISPLAY_SECONDS before the next one replaces it. Without this,
+    phases that finish in well under a second (collection load, retrieval)
+    flash by unreadably fast. Slower phases (the actual model calls) already
+    exceed the threshold, so this never adds a perceptible delay to them.
+    """
+    last_switch = time.perf_counter()
+
+    def set_status(label: str) -> None:
+        nonlocal last_switch
+        elapsed = time.perf_counter() - last_switch
+        if elapsed < MIN_STATUS_DISPLAY_SECONDS:
+            time.sleep(MIN_STATUS_DISPLAY_SECONDS - elapsed)
+        status.update(label)
+        last_switch = time.perf_counter()
+
+    return set_status
+
+
+@contextmanager
+def _spinner(label: str, set_status: Callable[[str], None] | None):
+    """Show `label` on an already-active spinner via set_status, or open a new
+    one if none is active. Opening a second Rich Live while one is already
+    active renders as two overlapping spinners in a real terminal, so callers
+    with an active outer status must pass its update method through here
+    instead of letting this open its own.
+    """
+    if set_status is not None:
+        set_status(label)
+        yield
+    else:
+        with console.status(label):
+            yield
+
+
 def _wait_for_model(
     messages: list[dict],
     label: str = "Thinking...",
     *,
     on_response: Callable[[Mapping], None] | None = None,
+    set_status: Callable[[str], None] | None = None,
 ) -> str:
     """Call chat_messages with a spinner so a multi-minute wait doesn't look hung."""
-    with console.status(label):
+    with _spinner(label, set_status):
         return chat_messages(messages, response_format=RESPONSE_SCHEMA, on_response=on_response)
 
 
@@ -737,11 +801,12 @@ def _review_and_revise(
     *,
     on_generation_response: Callable[[Mapping], None] | None = None,
     on_review_response: Callable[[Mapping], None] | None = None,
+    set_status: Callable[[str], None] | None = None,
 ) -> str:
     """Run two reviewer critiques, each followed by a generator revision."""
     candidate = draft
     for pass_number in (1, 2):
-        with console.status(f"Reviewing draft ({pass_number}/2)..."):
+        with _spinner(f"Reviewing draft ({pass_number}/2)...", set_status):
             # messages[0:2] are the original system/user prompt, already sent to
             # assemble_review_messages explicitly as prompt.system/prompt.user --
             # passing the full list here would duplicate the entire grounding
@@ -764,6 +829,7 @@ def _review_and_revise(
             messages,
             "Finalizing..." if pass_number == 2 else "Revising draft...",
             on_response=on_generation_response,
+            set_status=set_status,
         )
     return candidate
 
@@ -804,6 +870,7 @@ def _run_conversation_tracked(
     review: bool = False,
     on_generation_response: Callable[[Mapping], None] | None = None,
     on_review_response: Callable[[Mapping], None] | None = None,
+    set_status: Callable[[str], None] | None = None,
 ) -> ConversationOutcome:
     """Run the generation call, handling up to max_followups (or
     config.MAX_FOLLOWUP_TURNS if not given) interactive clarifying questions
@@ -826,7 +893,9 @@ def _run_conversation_tracked(
     blank_retry_available = True
 
     while True:
-        raw_reply = _wait_for_model(messages, on_response=on_generation_response)
+        raw_reply = _wait_for_model(
+            messages, on_response=on_generation_response, set_status=set_status
+        )
         reply = parse_model_reply(raw_reply)
         if not reply.needs_info:
             if _is_blank_response(reply.response) and blank_retry_available:
@@ -841,6 +910,7 @@ def _run_conversation_tracked(
                     raw_reply,
                     on_generation_response=on_generation_response,
                     on_review_response=on_review_response,
+                    set_status=set_status,
                 )
                 if review
                 else raw_reply
@@ -852,7 +922,10 @@ def _run_conversation_tracked(
         if followups_remaining <= 0:
             messages.append({"role": "user", "content": FORCED_COMPLETION_INSTRUCTION})
             raw_reply = _wait_for_model(
-                messages, "Wrapping up...", on_response=on_generation_response
+                messages,
+                "Wrapping up...",
+                on_response=on_generation_response,
+                set_status=set_status,
             )
             final_reply = (
                 _review_and_revise(
@@ -861,6 +934,7 @@ def _run_conversation_tracked(
                     raw_reply,
                     on_generation_response=on_generation_response,
                     on_review_response=on_review_response,
+                    set_status=set_status,
                 )
                 if review
                 else raw_reply
