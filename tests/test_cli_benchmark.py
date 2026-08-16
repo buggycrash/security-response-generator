@@ -40,6 +40,7 @@ def _fake_generate(
     on_embed_response=None,
     on_generation_response=None,
     on_review_response=None,
+    set_status=None,
 ):
     if on_retrieval_timing is not None:
         from security_response_generator.generation.retrieval import RetrievalTiming

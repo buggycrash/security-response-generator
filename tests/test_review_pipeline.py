@@ -35,7 +35,7 @@ def test_review_and_revise_runs_two_critiques_and_two_generator_revisions(monkey
         review_calls.append((messages, response_format))
         return next(reviewer_replies)
 
-    def fake_wait(messages, label="Thinking...", *, on_response=None):
+    def fake_wait(messages, label="Thinking...", *, on_response=None, set_status=None):
         generator_calls.append((list(messages), label))
         return next(generator_replies)
 
@@ -82,7 +82,7 @@ def test_review_and_revise_does_not_duplicate_original_prompt_in_conversation(mo
     def fake_review(messages, response_format=None, *, on_response=None):
         return next(reviewer_replies)
 
-    def fake_wait(messages, label="Thinking...", *, on_response=None):
+    def fake_wait(messages, label="Thinking...", *, on_response=None, set_status=None):
         return next(generator_replies)
 
     monkeypatch.setattr(cli, "assemble_review_messages", spy_assemble_review_messages)

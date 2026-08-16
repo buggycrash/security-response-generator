@@ -526,23 +526,11 @@ generation and reviewer models up to four times per control
 model showing a cold-sized `load_duration` even though that same model
 already ran warm earlier in the same request, that's a sign Ollama may be
 evicting and reloading models on every swap rather than keeping both
-resident -- worth investigating if you have VRAM headroom to spare (see
-"Responses are much slower than expected" in
-[Troubleshooting](#troubleshooting)).
-
-To test whether keeping more models resident at once helps, restart Ollama
-with a higher `OLLAMA_MAX_LOADED_MODELS` and compare benchmark reports
-before/after. This can't be done automatically from inside `srg benchmark`,
-since the daemon is a background service you may depend on elsewhere and the
-setting only takes effect at `ollama serve` startup:
-
-```bash
-# stop however you started it (e.g. Ctrl-C the terminal running `ollama serve`,
-# or `pkill ollama` if it was started in the background)
-export OLLAMA_MAX_LOADED_MODELS=2   # or higher; try a couple of values
-ollama serve &
-srg benchmark SI-5 --review
-```
+resident. Ollama's default `OLLAMA_MAX_LOADED_MODELS` (3x the number of
+GPUs, or 3 on CPU-only systems) is already enough for the two models
+involved in a review pass, so this is a memory-pressure symptom rather than
+something the setting fixes -- see "Responses are much slower than
+expected" in [Troubleshooting](#troubleshooting).
 
 ## Technology Stack
 

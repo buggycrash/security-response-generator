@@ -37,9 +37,13 @@ Security Response Generator (`srg`) is a local CLI that drafts NIST SP
 
 ## Supported platforms
 
-SRG has been tested on Ubuntu 22.04 and on an Apple Silicon Mac (M1 MacBook
-Pro, 16GB unified memory, macOS Tahoe). It is not compatible with native
-Windows, but it can run within WSL2.
+SRG has been tested in Windows WSL2 Ubuntu 22.04 with 8GB of RAM and passthrough to 12GB VRAM, and on an Apple Silicon M1 MacBook
+Pro with 16GB of unified memory running macOS Tahoe.  
+
+Consider 8GB of dedicated VRAM or 16 GB of unified RAM as the minimum requirements   
+
+It is not compatible with native
+Windows.
 
 ## Install
 
@@ -79,7 +83,8 @@ srg generate SI-5 --context "CISA alerts are received by the State SOC and forwa
 
 ![](docs/images/image7.png)
 
-The response begins with `Customer: DEMO` to be clear this is for demonstration purposes.
+The response begins with `Customer: DEMO` to be clear this is for demonstration purposes.  
+Response is not immediate, but takes less than 40 seconds on the tested platforms.
 
 
 ## Create a customer engagement

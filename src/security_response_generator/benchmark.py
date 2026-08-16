@@ -284,9 +284,10 @@ def _print_findings(report: BenchmarkReport, console: Console) -> None:
                     f"warm earlier in this same request (load_duration "
                     f"{seen_models[call.model]:.1f}s then). This suggests Ollama may be "
                     "evicting/reloading models on every swap between the generation and "
-                    "reviewer models. Try: stop `ollama serve`, "
-                    "`export OLLAMA_MAX_LOADED_MODELS=2` (or higher), restart it, then "
-                    "re-run this benchmark with --review and compare."
+                    "reviewer models. Run `ollama ps` during a `--review` request to see "
+                    "whether both models stay resident, and check whether either is "
+                    "spilling to system RAM/CPU instead of GPU (a common cause on memory-"
+                    "constrained systems)."
                 )
                 found_any = True
             seen_models[call.model] = call.load_seconds
