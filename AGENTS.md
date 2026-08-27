@@ -1,5 +1,13 @@
 # AGENTS.md
 
+## Before you start
+
+Read `README.md` and `docs/technical-readme.md` in full before exploring
+the rest of the repository or making changes. They cover setup, CLI
+usage, engagement management, retrieval/prompt architecture, environment
+variables, security/privacy boundaries, and troubleshooting — read them
+first instead of reconstructing that context by searching source files.
+
 ## Project
 
 Security Response Generator is a Python 3.11+ local RAG CLI for drafting
