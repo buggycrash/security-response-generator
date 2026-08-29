@@ -1,9 +1,6 @@
 # TODO
 
-- [ ] Design review
-- [ ] Make the security discussion in `docs/technical-readme.md` more
-      thorough and clear, and make it easier for people who only read the
-      root `README.md` to find.
+
 
 ## Longer term
 
@@ -27,18 +24,6 @@
       existing silent revise-only `--review` flag.
 - [ ] Add a Bedrock or other cloud gateway client as an alternative to the local Ollama backend.
 - [ ] Generate OSCAL-formatted output in addition to Markdown/text.
-- [ ] Investigate the viability of building this as a cloud-native AWS
-      deployment via Terraform, rather than just lifting-and-shifting onto a
-      single EC2 instance. Needs research into which AWS services fit this
-      tool's shape (local RAG CLI: model inference, vector store/index,
-      per-engagement isolation of customer standards/context, CLI or
-      service-style access) -- e.g. Bedrock vs. self-hosted inference,
-      OpenSearch/vector-capable storage vs. something serverless, how
-      per-customer-engagement isolation and the local-only/no-cloud-model
-      boundary described in `docs/technical-readme.md` would need to change
-      or be reconceived for a multi-tenant cloud architecture. Scope and
-      target architecture are open questions, not just an implementation
-      task.
 - [ ] Investigate JSON-schema-constrained decoding (`format=` on every generation/review
       call) as a major, currently-invisible cost: `srg benchmark` showed generation/review
       calls taking ~4-5x longer per output token than the model's raw decode speed

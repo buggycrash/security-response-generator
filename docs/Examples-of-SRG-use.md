@@ -57,7 +57,9 @@ Larger models are generally more reliable. The default `Gemma4:E4B-it-qat` model
 | Gemma4:E2B-it-qat | OK alignment, small VRAM footprint, chosen as the default reviewer model |
 | Llama3.1:8B | Consistent, generally well aligned, a mostly viable alternative to the default model due to quality, consistency, and 7GB VRAM usage size |
 | Granite4.1:8B | Thorough but drifts across control boundaries, sometimes harsh prose, needs 8GB of VRAM thus won't fit on an 8GB card alongside embeddinggemma and other system activity |
+| Granite4.2:8B | Better than 4.1, but now slow (due to thinking) and still uses 8GB VRAM |
 | Qwen3:8B | Good alignment, 5.2GB VRAM usage would fit well on an 8GB card, Chinese origin makes it unlikely to get customer approval for use. |
+| Ornith-1.5:9b | Good quality and actual VRAM usage, but far too slow due to thinking. |
 | Gemma4:E4B | Very good alignment and prose, but uses too much VRAM for even a 12GB card |
 | Gemma4:E4B-it-qat | Essentially Gemma4:E4B with a smaller VRAM footprint.  Set as the default generation model. |
 | Gemma4:12B-it-qat | Best prose of any model tested that would fit on the testing platform totally in VRAM, but does use 8GB of VRAM making it too large to fit on an 8GB card alongside embeddinggemma and other system activity.  Noticably slower than the default model. |

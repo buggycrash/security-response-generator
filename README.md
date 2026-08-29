@@ -45,6 +45,13 @@ Consider 8GB of dedicated VRAM or 16 GB of unified RAM as the minimum requiremen
 It is not compatible with native
 Windows.
 
+## Security and privacy
+
+SRG treats the workstation as its trust boundary, keeping customer material
+and model processing local while isolating data between customer engagements;
+see [Security & Privacy](docs/technical-readme.md#security--privacy) for the
+conceptual data flow, safeguards, and boundary assumptions.
+
 ## Install
 
 Clone the repository, enter its directory, and run:
