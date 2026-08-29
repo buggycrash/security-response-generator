@@ -666,22 +666,66 @@ window can hold.
 
 ## Security & Privacy
 
-- Customer engagement folders are gitignored, including their standards,
-  private context, indexes, and generated responses. Only the explicitly
-  fictional `engagements/demo/` seed files are committed.
-- The Python client is pinned to Ollama at `127.0.0.1:11434`; an
-  `OLLAMA_HOST` environment override cannot redirect SRG to a remote server.
-- SRG rejects Ollama model tags ending in `cloud` or `-cloud` before sending
-  document or prompt content.
-- Every Ollama CLI call made by the setup script or launcher is pinned to
-  loopback. Any Ollama daemon started by SRG has cloud features disabled
-  with `OLLAMA_NO_CLOUD=1`.
-- Chroma is created with `anonymized_telemetry=False`, disabling its product
-  telemetry.
-- `srg update-nist` is an explicit exception to otherwise local document
-  processing: it connects to the configured HTTPS OSCAL source and writes
-  only the converted catalog to the selected output path. It does not send
-  customer standards, private context, prompts, or generated responses.
+SRG's security boundary is the workstation on which it runs. The design goal
+is to keep customer requirements, private system facts, prompts, indexes, and
+draft responses inside that boundary while preventing material from one
+customer engagement from being used in another. This reduces disclosure risk
+from hosted AI services and cross-customer retrieval, but it assumes the host,
+local user account, filesystem, backups, and Ollama installation are trusted.
+
+Conceptually, customer data follows this path:
+
+1. **Store and separate:** the analyst places customer standards and private
+   system context in the active engagement. The public NIST baseline is shared,
+   but every engagement has its own source folders, Chroma index, and response
+   folder. The index contains derived embeddings and source text, so it should
+   be protected as customer data too.
+2. **Transform locally:** during ingestion, SRG reads the documents, divides
+   them into chunks, and sends those chunks over the loopback interface to the
+   local embedding model. The resulting index remains on the workstation in
+   either the shared NIST database or the active engagement's database.
+3. **Use only relevant context:** for `generate` and `chat`, SRG embeds the
+   request locally, retrieves a bounded set of relevant chunks from the shared
+   baseline and active engagement, and sends that material over loopback to the
+   local generation model. When review is enabled, the draft and its grounding
+   material also go to the local reviewer model. SRG does not query indexes
+   belonging to inactive engagements.
+4. **Return the draft to the analyst:** output is printed to the terminal and
+   is written to disk only when requested (or as part of `bulk-generate`). SRG
+   labels generated responses with the active customer so copied or saved
+   drafts retain their engagement context. The output remains a draft requiring
+   human review.
+
+The implementation safeguards support that flow for specific reasons:
+
+- **Keep model traffic on the workstation.** The Python client is pinned to
+  Ollama at `127.0.0.1:11434`, so an `OLLAMA_HOST` environment override cannot
+  redirect document or prompt content to a remote server. Every Ollama CLI call
+  made by the setup script or launcher is also pinned to loopback, and an
+  Ollama daemon started by SRG has cloud features disabled with
+  `OLLAMA_NO_CLOUD=1`.
+- **Reject accidental cloud-model selection.** SRG refuses Ollama model tags
+  ending in `cloud` or `-cloud` before it sends document or prompt content.
+  This makes the local-processing boundary a code-enforced rule rather than a
+  convention operators must remember.
+- **Reduce unintended outbound metadata.** Chroma is created with
+  `anonymized_telemetry=False`, disabling its product telemetry.
+- **Limit cross-customer access.** Customer standards, private context,
+  indexes, and generated responses live under the active engagement instead of
+  in a common customer-data collection. The shared database contains only the
+  public NIST baseline.
+- **Reduce accidental source-control disclosure.** Customer engagement folders
+  are gitignored; only the explicitly fictional `engagements/demo/` seed files
+  are committed. Git ignore is a backstop against accidental commits, not an
+  access-control, encryption, retention, or backup mechanism.
+
+`srg update-nist` is an explicit exception to the otherwise local document-
+processing path: it connects to the configured HTTPS OSCAL source and writes
+only the converted public catalog to the selected output path. It does not send
+customer standards, private context, prompts, indexes, or generated responses.
+Installing dependencies and downloading Ollama models may also require network
+access, but those operations are separate from processing engagement content.
+
 ## File Structure
 
 ```
