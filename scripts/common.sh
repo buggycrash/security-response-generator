@@ -13,7 +13,7 @@ export OLLAMA_HOST="http://127.0.0.1:11434"
 export OLLAMA_NO_CLOUD=1
 
 srg_info() {
-  printf '%s\n' "$*"
+  printf '%s\n' "$*" >&2
 }
 
 srg_error() {
@@ -40,6 +40,11 @@ srg_ollama_ready() {
 
 srg_start_ollama() {
   local log_file="${TMPDIR:-/tmp}/srg-ollama-serve.log"
+  # Querying an already-running daemon can itself occasionally take a few
+  # seconds, and this readiness check runs before the Python CLI has started,
+  # so nothing else prints anything during that wait. Announce it immediately
+  # so a slow check doesn't look like a hung terminal.
+  srg_info "Checking the Ollama daemon..."
   if srg_ollama_ready; then
     return 0
   fi

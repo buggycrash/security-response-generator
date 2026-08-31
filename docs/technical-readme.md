@@ -542,7 +542,10 @@ qualification process for the next phase are captured in the
   unverifiable result cannot remain `viable`. This narrow call uses temperature
   zero and a 128-token output ceiling so a reviewer that ignores the requested
   short format cannot generate indefinitely; malformed or truncated output is
-  recorded as `unverified` and the evaluation continues. A separate assessment call receives
+  recorded as `unverified` and the evaluation continues. SRG explicitly disables
+  thinking for this call, since Ollama counts a thinking-capable reviewer
+  model's hidden reasoning tokens against the same 128-token ceiling, which
+  could otherwise exhaust the budget before any JSON content is emitted. A separate assessment call receives
   the customer standard, private context, NIST baseline, rubric, narrative, and
   validations, but not the analyst context or opposing response. This prevents
   source leakage and relative contrast while keeping each prompt bounded as
