@@ -5,7 +5,8 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
-GENERATION_MODEL = os.environ.get("SRG_GEN_MODEL", "gemma4:e4b-it-qat")
+DEFAULT_GENERATION_MODEL = "gemma4:e4b-it-qat"
+GENERATION_MODEL = os.environ.get("SRG_GEN_MODEL", DEFAULT_GENERATION_MODEL)
 REVIEW_MODEL = os.environ.get("SRG_REVIEW_MODEL", "gemma4:e2b-it-qat")
 EMBEDDING_MODEL = os.environ.get("SRG_EMBED_MODEL", "embeddinggemma")
 GENERATION_KEEP_ALIVE = os.environ.get("SRG_GEN_KEEP_ALIVE", "20m")
@@ -31,6 +32,7 @@ KNOWLEDGE_BASE_DIR = PROJECT_ROOT / "knowledge_base"
 NIST_CATALOG_PATH = KNOWLEDGE_BASE_DIR / "NIST.SP.800-53-oscal.md"
 ENGAGEMENTS_DIR = PROJECT_ROOT / "engagements"
 ACTIVE_ENGAGEMENT_PATH = PROJECT_ROOT / ".srg" / "active-engagement"
+MODEL_EVALUATION_DIR = PROJECT_ROOT / "evaluation_runs"
 
 INSTRUCTIONS_PATH = PROJECT_ROOT / "prompts" / "instructions.md"
 CHAT_INSTRUCTIONS_PATH = PROJECT_ROOT / "prompts" / "chat_instructions.md"

@@ -13,7 +13,7 @@ import typer
 from rich.console import Console
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeElapsedColumn
 
-from security_response_generator import benchmark, config, engagements
+from security_response_generator import benchmark, config, engagements, model_evaluation
 from security_response_generator.generation import bulk_csv
 from security_response_generator.generation.formatting import normalize_to_ascii
 from security_response_generator.generation.prompt import (
@@ -28,6 +28,7 @@ from security_response_generator.generation.prompt import (
 )
 from security_response_generator.generation.retrieval import (
     RetrievalTiming,
+    RetrievedChunk,
     retrieve_for_chat,
     retrieve_for_control,
 )
@@ -46,7 +47,12 @@ from security_response_generator.ingest.store import (
     get_collection,
     upsert_chunks,
 )
-from security_response_generator.llm.ollama_client import chat_messages, review_messages
+from security_response_generator.llm.ollama_client import (
+    chat_messages,
+    embed_query,
+    generate_messages,
+    review_messages,
+)
 
 _SYSTEMIC_ERRORS = (ConnectionError, ollama.ResponseError, ValueError, OSError)
 
@@ -294,6 +300,8 @@ def _generate_control_response(
     max_followups: int | None,
     review: bool,
     *,
+    generation_model: str | None = None,
+    generation_seed: int | None = None,
     on_retrieval_timing: Callable[[RetrievalTiming], None] | None = None,
     on_embed_response: Callable[[Mapping], None] | None = None,
     on_generation_response: Callable[[Mapping], None] | None = None,
@@ -337,6 +345,8 @@ def _generate_control_response(
         output_format,
         max_followups,
         review=review,
+        generation_model=generation_model,
+        generation_seed=generation_seed,
         on_generation_response=on_generation_response,
         on_review_response=on_review_response,
         set_status=set_status,
@@ -571,6 +581,185 @@ def bulk_generate(
     _show_demo_reminder(engagement)
 
 
+@app.command("evaluate-model")
+def evaluate_model_command(
+    candidate_model: str = typer.Argument(
+        ..., help="Installed local generation model to compare with the SRG default."
+    ),
+    compare_to: str = typer.Option(
+        config.DEFAULT_GENERATION_MODEL,
+        "--compare-to",
+        help="Comparison generation model (default: SRG's shipped generation model).",
+    ),
+    profile: str = typer.Option(
+        "smoke",
+        "--profile",
+        help="Evaluation profile. Only the abbreviated smoke profile is currently available.",
+    ),
+    output_dir: Path = typer.Option(
+        config.MODEL_EVALUATION_DIR,
+        "--output-dir",
+        help="Parent directory for the timestamped evaluation artifact folder.",
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Accept the displayed evaluation plan without an interactive confirmation.",
+    ),
+) -> None:
+    """Compare a candidate generation model with SRG's shipped default.
+
+    The smoke profile uses committed fictional inputs and is intended for rapid
+    development feedback, not final model qualification. It never invokes SRG's
+    review/revision pipeline or reads an active customer engagement.
+    """
+    if profile != "smoke":
+        typer.echo("Only '--profile smoke' is currently available.", err=True)
+        raise typer.Exit(code=2)
+
+    # Ollama's installed-model query can occasionally take several seconds.
+    # Print the heading first so command startup never appears unresponsive.
+    typer.echo("\nSRG generation-model evaluation\n")
+    try:
+        with console.status("Checking evaluation prerequisites..."):
+            model_evaluation.validate_preflight(
+                candidate_model, compare_to, config.REVIEW_MODEL, output_dir
+            )
+    except _SYSTEMIC_ERRORS as exc:
+        typer.echo(f"Model evaluation preflight failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    cases = model_evaluation.load_smoke_cases()
+    comparison_label = (
+        "SRG shipped default"
+        if model_evaluation.normalize_model_name(compare_to)
+        == model_evaluation.normalize_model_name(config.DEFAULT_GENERATION_MODEL)
+        else "explicit override"
+    )
+    plan = (
+        f"Candidate model:  {candidate_model}\n"
+        f"Comparison model: {compare_to} ({comparison_label})\n"
+        f"Grader model:     {config.REVIEW_MODEL}\n"
+        "Scope:            Generation model only; review/revision is disabled\n"
+        "Profile:          SMOKE - development feedback, not qualification\n"
+        f"Cases:            {len(cases)} fictional control-response tasks\n"
+        f"Response trials:  {model_evaluation.SMOKE_RESPONSE_TRIALS} total\n"
+        f"Grader calls:     {model_evaluation.SMOKE_GRADER_CALLS} total "
+        "(analyst check + assessment per response)\n"
+        "Measurements:     Generation time, memory/GPU residency, requirement coverage\n"
+        "Coverage:         Missing analyst context or no customer coverage = not viable\n"
+        "                  Partial customer or incomplete private coverage = edits\n"
+        "Placeholders:     2+ = not viable; 1 = edits\n"
+        "Quality limit:    Automated review does not score prose quality or writing style\n"
+        f"Estimated time:   {model_evaluation.SMOKE_ESTIMATE}\n"
+        "    Hardware note: Models larger than SRG's default—or mixture-of-experts "
+        "(MoE) models—may take much longer on typical workstations\n"
+        f"Artifacts:        timestamped folder under {output_dir}\n"
+        "Customer data:    No active engagement data will be used\n\n"
+        "Ollama generation models will be loaded and unloaded. After confirmation,\n"
+        "the run is fully noninteractive. If a model asks for missing information,\n"
+        "SRG automatically makes one final call requiring a placeholder-annotated\n"
+        "response based only on the supplied fictional context.\n"
+        "No source documents, indexes, or engagement data will be modified."
+    )
+    typer.echo(plan)
+    if not yes and not typer.confirm("\nProceed?", default=False):
+        typer.echo("Evaluation cancelled.")
+        return
+
+    # Print a persistent line before any setup work. Rich's animated status can
+    # take a moment to become visible while Ollama starts an unloaded embedding
+    # model, so this guarantees immediate feedback after confirmation.
+    console.print("\nStarting smoke evaluation...")
+    instructions = config.INSTRUCTIONS_PATH.read_text(encoding="utf-8")
+
+    def generate_trial(
+        case: model_evaluation.EvaluationCase, model: str, seed: int, phase: str
+    ) -> model_evaluation.GenerationOutput:
+        # Exercise the same query-embedding model used by normal retrieval while
+        # keeping the actual grounding chunks frozen across candidate models.
+        embed_query(f"{case.control_id} {case.context}")
+        expected_resident = [config.EMBEDDING_MODEL]
+        if phase != "cold":
+            expected_resident.insert(0, model)
+        monitoring_start = time.perf_counter()
+        model_evaluation.require_models_resident(
+            expected_resident,
+            checkpoint=f"while embedding before the {phase} generation trial",
+        )
+        monitoring_seconds = time.perf_counter() - monitoring_start
+
+        def chunks(values: list[str], source: str) -> list:
+            return [
+                RetrievedChunk(text=value, source_path=source, chunk_id=f"{source}::{index}")
+                for index, value in enumerate(values)
+            ]
+
+        prompt = assemble_prompt(
+            instructions=instructions,
+            control_id=case.control_id,
+            context_notes=case.context,
+            customer_chunks=chunks(case.customer_chunks, f"eval/{case.id}/customer.md"),
+            baseline_chunks=chunks(case.baseline_chunks, f"eval/{case.id}/nist.md"),
+            private_chunks=chunks(case.private_chunks, f"eval/{case.id}/private.md"),
+            output_format=OutputFormat.markdown,
+        )
+        model_calls: list[dict] = []
+
+        def record_response(response: Mapping) -> None:
+            keys = (
+                "model",
+                "total_duration",
+                "load_duration",
+                "prompt_eval_duration",
+                "eval_duration",
+                "prompt_eval_count",
+                "eval_count",
+            )
+            model_calls.append({key: response.get(key) for key in keys})
+
+        outcome = _run_conversation_tracked(
+            prompt,
+            OutputFormat.markdown,
+            max_followups=0,
+            review=False,
+            generation_model=model,
+            generation_seed=seed,
+            on_generation_response=record_response,
+        )
+        return model_evaluation.GenerationOutput(
+            response_text=outcome.text,
+            model_calls=model_calls,
+            forced_completion=outcome.forced_completion,
+            monitoring_seconds=monitoring_seconds,
+        )
+
+    try:
+        with console.status("Preparing model evaluation...") as status:
+            result = model_evaluation.run_smoke_evaluation(
+                candidate_model,
+                compare_to,
+                generate=generate_trial,
+                output_root=output_dir,
+                on_status=status.update,
+            )
+    except model_evaluation.EvaluationInterrupted as exc:
+        typer.echo("Model evaluation interrupted; completed work was preserved.", err=True)
+        typer.echo(f"Partial artifacts: {exc.output_dir.resolve()}", err=True)
+        if exc.artifact_error:
+            typer.echo(f"Artifact warning: {exc.artifact_error}", err=True)
+        if exc.cleanup_error:
+            typer.echo(f"Model cleanup warning: {exc.cleanup_error}", err=True)
+        raise typer.Exit(code=130) from exc
+    except _SYSTEMIC_ERRORS as exc:
+        typer.echo(f"Model evaluation aborted: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo()
+    typer.echo(model_evaluation.render_summary(result, color=console.color_system is not None))
+
+
 @app.command("benchmark")
 def benchmark_command(
     control_ids: list[str] = typer.Argument(
@@ -786,12 +975,22 @@ def _wait_for_model(
     messages: list[dict],
     label: str = "Thinking...",
     *,
+    generation_model: str | None = None,
+    generation_seed: int | None = None,
     on_response: Callable[[Mapping], None] | None = None,
     set_status: Callable[[str], None] | None = None,
 ) -> str:
     """Call chat_messages with a spinner so a multi-minute wait doesn't look hung."""
     with _spinner(label, set_status):
-        return chat_messages(messages, response_format=RESPONSE_SCHEMA, on_response=on_response)
+        if generation_model is None:
+            return chat_messages(messages, response_format=RESPONSE_SCHEMA, on_response=on_response)
+        return generate_messages(
+            messages,
+            model=generation_model,
+            seed=config.GENERATION_SEED if generation_seed is None else generation_seed,
+            response_format=RESPONSE_SCHEMA,
+            on_response=on_response,
+        )
 
 
 def _review_and_revise(
@@ -799,12 +998,19 @@ def _review_and_revise(
     messages: list[dict],
     draft: str,
     *,
+    generation_model: str | None = None,
+    generation_seed: int | None = None,
     on_generation_response: Callable[[Mapping], None] | None = None,
     on_review_response: Callable[[Mapping], None] | None = None,
     set_status: Callable[[str], None] | None = None,
 ) -> str:
     """Run two reviewer critiques, each followed by a generator revision."""
     candidate = draft
+    model_kwargs = (
+        {"generation_model": generation_model, "generation_seed": generation_seed}
+        if generation_model is not None
+        else {}
+    )
     for pass_number in (1, 2):
         with _spinner(f"Reviewing draft ({pass_number}/2)...", set_status):
             # messages[0:2] are the original system/user prompt, already sent to
@@ -830,6 +1036,7 @@ def _review_and_revise(
             "Finalizing..." if pass_number == 2 else "Revising draft...",
             on_response=on_generation_response,
             set_status=set_status,
+            **model_kwargs,
         )
     return candidate
 
@@ -868,6 +1075,8 @@ def _run_conversation_tracked(
     max_followups: int | None = None,
     *,
     review: bool = False,
+    generation_model: str | None = None,
+    generation_seed: int | None = None,
     on_generation_response: Callable[[Mapping], None] | None = None,
     on_review_response: Callable[[Mapping], None] | None = None,
     set_status: Callable[[str], None] | None = None,
@@ -891,10 +1100,18 @@ def _run_conversation_tracked(
     ]
     followups_remaining = config.MAX_FOLLOWUP_TURNS if max_followups is None else max_followups
     blank_retry_available = True
+    model_kwargs = (
+        {"generation_model": generation_model, "generation_seed": generation_seed}
+        if generation_model is not None
+        else {}
+    )
 
     while True:
         raw_reply = _wait_for_model(
-            messages, on_response=on_generation_response, set_status=set_status
+            messages,
+            on_response=on_generation_response,
+            set_status=set_status,
+            **model_kwargs,
         )
         reply = parse_model_reply(raw_reply)
         if not reply.needs_info:
@@ -911,6 +1128,7 @@ def _run_conversation_tracked(
                     on_generation_response=on_generation_response,
                     on_review_response=on_review_response,
                     set_status=set_status,
+                    **model_kwargs,
                 )
                 if review
                 else raw_reply
@@ -926,6 +1144,7 @@ def _run_conversation_tracked(
                 "Wrapping up...",
                 on_response=on_generation_response,
                 set_status=set_status,
+                **model_kwargs,
             )
             final_reply = (
                 _review_and_revise(
@@ -935,6 +1154,7 @@ def _run_conversation_tracked(
                     on_generation_response=on_generation_response,
                     on_review_response=on_review_response,
                     set_status=set_status,
+                    **model_kwargs,
                 )
                 if review
                 else raw_reply

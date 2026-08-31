@@ -79,12 +79,35 @@ def chat_messages(
     *,
     on_response: Callable[[Mapping], None] | None = None,
 ) -> str:
-    _require_local_model(GENERATION_MODEL)
-    options: dict = {"num_ctx": NUM_CTX, "seed": GENERATION_SEED}
+    return generate_messages(
+        messages,
+        model=GENERATION_MODEL,
+        seed=GENERATION_SEED,
+        response_format=response_format,
+        on_response=on_response,
+    )
+
+
+def generate_messages(
+    messages: list[dict],
+    *,
+    model: str,
+    seed: int,
+    response_format: dict | None = None,
+    on_response: Callable[[Mapping], None] | None = None,
+) -> str:
+    """Send a generation request to an explicit local model.
+
+    Normal generation uses ``chat_messages`` and the configured default. Model
+    evaluation uses this entry point so two models can be compared in one process
+    without mutating global configuration or the caller's environment.
+    """
+    _require_local_model(model)
+    options: dict = {"num_ctx": NUM_CTX, "seed": seed}
     if GENERATION_TEMPERATURE is not None:
         options["temperature"] = GENERATION_TEMPERATURE
     response = _local_client().chat(
-        model=GENERATION_MODEL,
+        model=model,
         messages=messages,
         options=options,
         format=response_format,
@@ -103,11 +126,17 @@ def review_messages(
     response_format: dict | None = None,
     *,
     on_response: Callable[[Mapping], None] | None = None,
+    num_predict: int | None = None,
+    temperature: float | None = None,
 ) -> str:
     """Send a review request to the separately configured local reviewer model."""
     _require_local_model(REVIEW_MODEL)
     options: dict = {"num_ctx": NUM_CTX, "seed": GENERATION_SEED}
-    if GENERATION_TEMPERATURE is not None:
+    if num_predict is not None:
+        options["num_predict"] = num_predict
+    if temperature is not None:
+        options["temperature"] = temperature
+    elif GENERATION_TEMPERATURE is not None:
         options["temperature"] = GENERATION_TEMPERATURE
     response = _local_client().chat(
         model=REVIEW_MODEL,

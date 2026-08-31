@@ -50,6 +50,9 @@ srg = "security_response_generator.cli:app"
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+security_response_generator = ["evaluation_data/*.json"]
+
 [tool.ruff]
 line-length = 100
 src = ["src", "tests"]

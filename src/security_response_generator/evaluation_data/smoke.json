@@ -1,0 +1,53 @@
+{
+  "profile": "smoke",
+  "description": "Abbreviated generation-model comparison for development; not a qualification result.",
+  "rubric": [
+    "Evaluate customer-standard, private-context, and control-text coverage separately; never treat content from one source as coverage of another, and validation entries cannot substitute for narrative coverage. Analyst-context inclusion is handled by a separate precheck.",
+    "Apply source precedence and check that each source's material actors, relationships, parameters, quantities, and timeframes are preserved without distortion.",
+    "Evaluate relevance against the exact control ID; penalize substantial wrong-control content, but do not demand extra detail beyond that control.",
+    "Treat implementation claims unsupported by the supplied sources as defects; do not require or reward implementation specifics absent from those sources.",
+    "Evaluate validation entries as suggested evidence, not proof of implementation: check that they are plausibly obtainable and clearly connected to narrative claims without demanding evidence beyond the supplied facts."
+  ],
+  "cases": [
+    {
+      "id": "si5-context",
+      "control_id": "SI-5",
+      "context": "CISA alerts are received by the State SOC and forwarded to all system owners via internal controlled channels.",
+      "customer_chunks": [
+        "SI-5 SECURITY ALERTS, ADVISORIES, AND DIRECTIVES\n\nThe State requires threat and vulnerability alerts to be reviewed within 24 hours of receipt and disseminated to affected system owners within 48 hours. The designated external organization is the State ISO."
+      ],
+      "baseline_chunks": [
+        "SI-5 SECURITY ALERTS, ADVISORIES, AND DIRECTIVES\n\nControl ID: SI-5\n\nReceive system security alerts, advisories, and directives from designated external organizations on an ongoing basis; generate internal alerts, advisories, and directives as deemed necessary; disseminate them to designated personnel; implement them within organization-defined time periods; and notify the issuing organization of actions taken."
+      ],
+      "private_chunks": [
+        "DEMO-ECMS forwards application, container, identity, database, and cloud audit logs to Example Sentinel. The security operations team continuously monitors high-priority alerts. Relevant advisories are assigned to the system owner and engineering lead for impact analysis, remediation, and closure tracking."
+      ]
+    },
+    {
+      "id": "ac2-negative-fact",
+      "control_id": "AC-2",
+      "context": "There are no shared or group accounts.",
+      "customer_chunks": [
+        "AC-2 ACCOUNT MANAGEMENT\n\nAllowed account types are individual workforce, public user, service, and one documented break-glass emergency account. Shared or generic workforce accounts are prohibited. The Platform Team manages workforce accounts. Workforce accounts are reviewed quarterly and privileged access monthly."
+      ],
+      "baseline_chunks": [
+        "AC-2 ACCOUNT MANAGEMENT\n\nControl ID: AC-2\n\nDefine allowed and prohibited account types; assign account managers; approve and manage account creation, modification, disabling, and removal; monitor account use; review accounts; align account management with personnel changes; and change shared or group account authenticators when individuals leave the group, if such accounts are deployed."
+      ],
+      "private_chunks": [
+        "DEMO-ECMS uses ExampleLogin for public users and an enterprise identity provider for workforce users. Administrative access uses a separate privileged role. Access reviews occur quarterly and when personnel change roles or leave."
+      ]
+    },
+    {
+      "id": "sc8-enhancement-scope",
+      "control_id": "SC-8(1)",
+      "context": "TLS 1.3 protects the confidentiality and integrity of information in transit.",
+      "customer_chunks": [],
+      "baseline_chunks": [
+        "(1) CRYPTOGRAPHIC PROTECTION\n\nControl ID: SC-8(1)\n\nImplement cryptographic mechanisms to prevent unauthorized disclosure of information and detect changes to information during transmission. TLS and IPsec are examples of mechanisms that protect confidentiality and integrity during transmission."
+      ],
+      "private_chunks": [
+        "Users access DEMO-ECMS through a browser-based application. Requests pass through a cloud load balancer before reaching managed application containers."
+      ]
+    }
+  ]
+}

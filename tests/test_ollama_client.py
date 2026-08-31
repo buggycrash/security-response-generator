@@ -224,6 +224,28 @@ def test_chat_messages_calls_ollama_with_configured_model_and_raw_messages(monke
     assert captured["keep_alive"] == "20m"
 
 
+def test_generate_messages_uses_explicit_model_and_seed(monkeypatch):
+    captured = {}
+
+    class FakeClient:
+        def chat(self, model, messages, options, format, keep_alive):
+            captured.update(model=model, messages=messages, options=options)
+            return {"message": {"content": "response"}}
+
+    monkeypatch.setattr(ollama_client, "_local_client", lambda: FakeClient())
+    monkeypatch.setattr(ollama_client, "GENERATION_TEMPERATURE", None)
+
+    result = ollama_client.generate_messages(
+        [{"role": "user", "content": "prompt"}],
+        model="candidate:latest",
+        seed=44,
+    )
+
+    assert result == "response"
+    assert captured["model"] == "candidate:latest"
+    assert captured["options"] == {"num_ctx": ollama_client.NUM_CTX, "seed": 44}
+
+
 def test_chat_messages_passes_response_format_through(monkeypatch):
     captured = {}
     schema = {"type": "object", "properties": {"needs_info": {"type": "boolean"}}}
@@ -273,6 +295,7 @@ def test_review_messages_uses_separately_configured_local_model(monkeypatch):
         captured.update(
             model=model,
             messages=messages,
+            options=options,
             format=format,
             keep_alive=keep_alive,
         )
@@ -282,11 +305,18 @@ def test_review_messages_uses_separately_configured_local_model(monkeypatch):
     schema = {"type": "object"}
     messages = [{"role": "user", "content": "review this"}]
 
-    result = ollama_client.review_messages(messages, response_format=schema)
+    result = ollama_client.review_messages(
+        messages,
+        response_format=schema,
+        num_predict=128,
+        temperature=0.0,
+    )
 
     assert result == '{"critique":"revise"}'
     assert captured["model"] == ollama_client.REVIEW_MODEL
     assert captured["messages"] == messages
+    assert captured["options"]["num_predict"] == 128
+    assert captured["options"]["temperature"] == 0.0
     assert captured["format"] == schema
     assert captured["keep_alive"] == ollama_client.REVIEW_KEEP_ALIVE
 

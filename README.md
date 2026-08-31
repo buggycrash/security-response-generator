@@ -159,6 +159,22 @@ srg chat "How often do we need to audit logins?"
 
 Chatting can be very useful when the user is still learning the customer standards, or the customer provides standards AND policy that both need to be considered when generating a response.
 
+## Evaluate a candidate generation model
+
+Run a short, repeatable comparison between an installed candidate model and
+SRG's shipped generation model:
+
+```bash
+srg evaluate-model <candidate-model>
+```
+
+The command first shows the fictional test cases, model-call count, estimated
+10-18 minute duration, and artifact location, then defaults to **no** at its
+confirmation prompt. The current `smoke` profile is intended for development
+feedback rather than final default-model qualification. See
+[Evaluate a generation model](docs/technical-readme.md#evaluate-a-generation-model)
+for its timing thresholds, quality checks, and output artifacts.
+
 ## Common next steps
 
 ```bash
