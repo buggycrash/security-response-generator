@@ -30,6 +30,9 @@ engagements/*/responses/
 # Local active-engagement selection
 .srg/
 
+# Generated model-evaluation artifacts (fictional inputs, local model outputs)
+evaluation_runs/
+
 # Env / secrets
 .env
 .env.local

@@ -4,24 +4,16 @@
 
 ## Longer term
 
-- [ ] Add a model-evaluation feature for generated responses, inspired by the
-      "Evaluating research agents" approach in
-      https://www.anthropic.com/engineering/demystifying-evals-for-ai-agents
-      (multiple graders rather than one score: groundedness against retrieved
-      chunks, coverage of required control elements, source-tier quality
-      customer/state standard vs. generic NIST vs. private context, plus an
-      open-ended LLM rubric for coherence/completeness -- and a reminder that
-      LLM-based rubric grading should be periodically calibrated against
-      human/assessor judgment, not trusted blindly). Reuse the existing
-      `--review` critique pipeline (`generation/review.py`,
-      `_review_and_revise()` in `cli.py`) as the starting point, but change
-      the output behavior: today the reviewer's critique is purely internal
-      and is folded straight into a revision prompt, never shown to the user
-      (see `parse_critique()` / `revision_instruction()` in
-      `generation/review.py`). This feature should instead print the
-      critique/eval findings to the screen for the human to read, likely as
-      a new opt-in mode (e.g. `srg generate --evaluate`) separate from the
-      existing silent revise-only `--review` flag.
+- [ ] Expand `srg evaluate-model` beyond its development-oriented generation
+      smoke profile. Add a standard qualification suite with more fictional
+      controls and repeated trials, calibrate automated rubric findings against
+      blinded human judgment, and define the acceptance criteria required to
+      change SRG's shipped generation-model default. Later add a separate
+      reviewer-model suite that measures true- and false-positive critiques and
+      whether applying them improves drafts; do not treat generation and reviewer
+      qualification as the same task. See
+      [`docs/model-evaluation-standard-profile.md`](docs/model-evaluation-standard-profile.md)
+      for the implementation brief.
 - [ ] Add a Bedrock or other cloud gateway client as an alternative to the local Ollama backend.
 - [ ] Generate OSCAL-formatted output in addition to Markdown/text.
 - [ ] Investigate JSON-schema-constrained decoding (`format=` on every generation/review

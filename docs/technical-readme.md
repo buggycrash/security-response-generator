@@ -462,6 +462,179 @@ permanent. It's worth periodically re-testing both the generation and
 reviewer model choices against your own prompts and hardware as new models
 become available.
 
+## Evaluate a generation model
+
+`srg evaluate-model` runs a short, repeatable comparison between an installed
+candidate generation model and SRG's shipped default (`gemma4:e4b-it-qat`):
+
+```bash
+srg evaluate-model llama3.1:8b
+```
+
+`--compare-to MODEL` is available for an explicit comparison, but is not
+required. The command does not automatically download models; if the candidate,
+comparison, embedding, or grader model is missing, preflight prints the exact
+`ollama pull` command and exits.
+
+Set `SRG_REVIEW_MODEL` for an evaluation-only grader experiment:
+
+```bash
+SRG_REVIEW_MODEL=llama3.1:8b srg evaluate-model phi4-mini
+```
+
+The grader must be installed locally and must differ from both generation
+models under test. The selected grader is shown in the confirmation plan and
+recorded in the evaluation artifacts.
+
+Before making any model calls, the command displays the candidate, comparison
+and grader models, scope, case and trial counts, estimated duration, and output
+location. It then asks `Proceed? [y/N]`, defaulting to no. `--yes` explicitly
+accepts the displayed plan for unattended use.
+
+Only the abbreviated `smoke` profile is currently available. It is designed to
+make development of the evaluation workflow reasonably quick, not to qualify a
+new default model. The planned workload, reporting, human sampling, and
+qualification process for the next phase are captured in the
+[standard-profile implementation brief](model-evaluation-standard-profile.md):
+
+- The candidate and comparison model each generate five responses: three SI-5
+  trials using seeds 42, 43, and 44, one AC-2 trial, and one SC-8(1) trial.
+- The first SI-5 request is measured from a verified unloaded generation model;
+  the next two are measured warm. A performance pass requires the cold request
+  to finish in under 75 seconds and both warm requests in under 40 seconds.
+- After every generation, SRG samples Ollama's running-model process table once
+  for both the generation and embedding models. The report shows average and
+  peak generation-model allocation, average GPU allocation, average combined
+  allocation with `embeddinggemma`, and whether the generation model was fully
+  GPU-resident at every sample. Model allocations over 7 GiB and incomplete GPU
+  residency are highlighted in deep orange. These are Ollama-reported loaded
+  allocations, not operating-system process RSS measurements.
+- Ollama process-table queries can occasionally take several seconds. Sampling
+  after generation occurs outside the measured interval; the pre-generation
+  residency check needed for ejection detection is timed separately and removed
+  from the reported generation duration. Poll durations and every raw residency
+  sample remain available in `results.json`.
+- `embeddinggemma` is warmed before each model's run and a real query embedding
+  occurs inside each timed trial. The candidate and embedding model must remain
+  resident together. Grounding chunks are frozen fictional fixtures, rather
+  than live retrieval results, so both generation models receive identical
+  evidence and no active customer engagement is read.
+- SRG checks residency after embedding and after every generation. If Ollama
+  ejects a required generation or embedding model, the evaluation stops,
+  preserves completed work as a failed partial run, and attempts to unload the
+  evaluation models. The ejected model and checkpoint are recorded in
+  `ERROR.txt`.
+- AC-2 tests explicit handling of a negative analyst fact without declaring the
+  control inapplicable. SC-8(1) tests exact-enhancement scope and unsupported
+  invention. SI-5 tests customer-standard precedence, analyst-context use, and
+  consistency across seeds.
+- Case-specific expectations come only from the analyst context, customer
+  standard, control text, and private context. A shared process rubric tells the
+  grader how to evaluate source coverage, precedence, scope, unsupported detail,
+  and validation suggestions; it does not restate benchmark-specific facts or
+  prescribe the answer. Validation entries are evaluated as suggested evidence,
+  not proof that implementation has occurred.
+- The configured local reviewer model evaluates each blinded response in
+  isolation using two calls after generation. A narrow analyst-inclusion call
+  receives only the exact analyst context and narrative—never validations or
+  other chunks—and returns an inclusion decision with a short verbatim narrative
+  quote. SRG verifies that a positive quote actually occurs in the narrative; an
+  unverifiable result cannot remain `viable`. This narrow call uses temperature
+  zero and a 128-token output ceiling so a reviewer that ignores the requested
+  short format cannot generate indefinitely; malformed or truncated output is
+  recorded as `unverified` and the evaluation continues. A separate assessment call receives
+  the customer standard, private context, NIST baseline, rubric, narrative, and
+  validations, but not the analyst context or opposing response. This prevents
+  source leakage and relative contrast while keeping each prompt bounded as
+  profiles add rounds. Every call supplies its complete input and receives no
+  previous grade, evaluation history, or cached result. The reviewer is fixed evaluation
+  infrastructure for this
+  command; SRG's review/revision pipeline is disabled and no candidate response
+  is revised. A generation model under test cannot also be the grader. The
+  analyst precheck is authoritative for analyst-context inclusion. Analyst
+  context counts as included when its recognizable,
+  analyst-specific substance appears accurately and relevantly in the narrative,
+  even when paraphrased or insufficient to satisfy other requirements. It is
+  missing only when that substance is absent from the narrative; validations and
+  generic control language cannot substitute for it. The NIST baseline informs
+  overall requirement coverage but not these source classifications. SRG then
+  applies the severity rules deterministically: missing analyst context is
+  `not_viable`; when customer chunks exist, no customer-standard coverage is
+  `not_viable` and partial coverage requires `material_edits`; missing or partial
+  coverage of supplied, relevant, non-conflicting private context requires
+  `material_edits` but cannot alone make a response `not_viable`. Empty customer
+  or private inputs are recorded as `not_provided` and carry no coverage penalty.
+  Scope guidance defines `focused`, `minor_drift`, and `material_drift`
+  separately. The grader may report material drift only when its issues identify
+  specific offending content and explain the unrelated control or topic;
+  supplied architecture that directly explains the requested implementation is
+  considered focused.
+  It does not reward true but irrelevant detail: substantial wrong-control
+  content limits a response to `material_edits`. Source material counts only
+  when correctly stated in the narrative rather than its validation suggestions.
+- SRG independently counts explicit `[PLACEHOLDER: ...]` markers in every
+  generation. One placeholder prevents a `viable` result; two or more make the
+  response `not_viable`. Whether SRG needed its automatic forced-completion call
+  is recorded but does not by itself change viability. A coverage-and-completeness
+  table lists analyst, customer, and private coverage alongside placeholder counts
+  and forced completions before the human-review priorities, while
+  `grader-findings.md` retains the same per-trial evidence and any deterministic
+  adjustment.
+- SRG aggregates the independent trial findings by case for the terminal
+  summary. A case is `viable` only when every trial is viable; any
+  `not_viable` or `material_edits` finding carries into the case result.
+  Automated model preference first favors the model with more viable trials,
+  then fewer `not_viable`, `inconclusive`, and `material_edits` trials. Equal
+  distributions produce a tie; the grader is never asked for a relative model
+  preference. The summary calls out model and trial combinations that need
+  human attention, while `grader-findings.md` retains every individual trial
+  judgment. Adding rounds therefore does not make the main result table grow
+  linearly.
+- Automated review evaluates requirement coverage, grounding, scope, and likely
+  defects. It does not score prose quality, writing style, clarity, or how
+  pleasant a response is to read. Models with equivalent automated results can
+  therefore produce materially different prose; the blinded human review is
+  the place to compare those qualities, and larger profiles may reasonably use
+  human spot checks rather than exhaustive reading.
+
+The run normally uses ten response trials and twenty independent grader calls: one
+analyst-inclusion check and one broader assessment for each response. After the initial
+confirmation, it is fully noninteractive. If a model asks for missing
+information, SRG automatically makes one final generation call requiring a
+placeholder-annotated response based only on the supplied fictional context.
+Expect approximately 10-18 minutes on the reference-class hardware described
+above. Models larger than SRG's default—or mixture-of-experts (MoE) models—may
+take much longer on typical workstations.
+
+Pressing Ctrl-C safely stops an evaluation. SRG preserves every completed trial,
+records the unfinished operation in `results.json`, writes `INTERRUPTED.txt`,
+attempts to unload the evaluation generation and grader models, applies normal
+run retention, and prints the partial artifact directory's absolute path. The
+unfinished operation is excluded from timings and the partial summary reports
+`INCOMPLETE` instead of a performance conclusion.
+
+Results are written to a timestamped, gitignored folder under
+`evaluation_runs/` by default. It contains raw per-trial responses, timing and
+Ollama residency metadata, structured and human-readable grader findings, a
+concise summary, a blinded `human-review.md` worksheet, and a separate
+`answer-key.md`. Complete the worksheet before opening the answer key to reduce
+model-name bias. If a model or grader call fails partway through, completed
+responses and an `ERROR.txt` explanation remain in that run's artifact folder.
+The terminal summary presents performance and automated assessments in tables
+using the exact model tags. Failed results and `not_viable` assessments appear
+in bold red, while individual timings that exceed their threshold appear in
+bold deep orange. The tables are followed by absolute paths suitable for
+commands such as `less`, `vim`, or `code`. SRG retains the newest 20 recognized
+evaluation run directories under the selected output parent and permanently
+removes older runs after each completed or partially completed evaluation.
+Unrelated folders and symlinks in that parent are not removed.
+
+Every report is labeled `SMOKE EVALUATION - NOT A MODEL-QUALIFICATION RESULT`.
+Automated grading is advisory; a future standard profile will need a larger
+task bank, more trials, and calibrated human acceptance criteria before it can
+support changing SRG's default. Reviewer-model qualification is also future
+work and will require a different suite.
+
 ## Keep_alive, temperature, and seed
 
 After each generation request, SRG asks Ollama to keep the generation model
