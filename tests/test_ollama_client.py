@@ -321,6 +321,36 @@ def test_review_messages_uses_separately_configured_local_model(monkeypatch):
     assert captured["keep_alive"] == ollama_client.REVIEW_KEEP_ALIVE
 
 
+def test_review_messages_passes_think_through_when_given(monkeypatch):
+    captured = {}
+
+    def fake_chat(model, messages, options, format, keep_alive, think=None):
+        captured["think"] = think
+        return {"message": {"content": '{"critique":"revise"}'}}
+
+    monkeypatch.setattr(ollama_client._local_client(), "chat", fake_chat, raising=False)
+
+    ollama_client.review_messages(
+        [{"role": "user", "content": "review this"}],
+        think=False,
+    )
+
+    assert captured["think"] is False
+
+
+def test_review_messages_omits_think_kwarg_by_default(monkeypatch):
+    def fake_chat(model, messages, options, format, keep_alive):
+        return {"message": {"content": '{"critique":"revise"}'}}
+
+    monkeypatch.setattr(ollama_client._local_client(), "chat", fake_chat, raising=False)
+
+    # A fake lacking a `think` parameter must not raise: review_messages should
+    # not send a `think` kwarg to Ollama unless a caller explicitly asks for one.
+    result = ollama_client.review_messages([{"role": "user", "content": "review this"}])
+
+    assert result == '{"critique":"revise"}'
+
+
 def test_review_messages_calls_on_response_with_raw_response(monkeypatch):
     def fake_chat(model, messages, options, format, keep_alive):
         return {"message": {"content": '{"critique":"revise"}'}, "load_duration": 777}

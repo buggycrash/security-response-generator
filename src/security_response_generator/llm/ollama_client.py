@@ -128,8 +128,18 @@ def review_messages(
     on_response: Callable[[Mapping], None] | None = None,
     num_predict: int | None = None,
     temperature: float | None = None,
+    think: bool | None = None,
 ) -> str:
-    """Send a review request to the separately configured local reviewer model."""
+    """Send a review request to the separately configured local reviewer model.
+
+    ``think`` is passed straight through to Ollama's ``think`` chat parameter
+    when given. Left at its default of ``None``, the reviewer model's own
+    default (which may include hidden reasoning tokens) applies. Callers with
+    a hard ``num_predict`` ceiling should pass ``think=False`` explicitly:
+    Ollama counts reasoning tokens against that same budget, so a
+    thinking-capable reviewer model can otherwise exhaust the entire ceiling
+    on hidden reasoning and return empty content.
+    """
     _require_local_model(REVIEW_MODEL)
     options: dict = {"num_ctx": NUM_CTX, "seed": GENERATION_SEED}
     if num_predict is not None:
@@ -138,12 +148,16 @@ def review_messages(
         options["temperature"] = temperature
     elif GENERATION_TEMPERATURE is not None:
         options["temperature"] = GENERATION_TEMPERATURE
+    chat_kwargs: dict = {}
+    if think is not None:
+        chat_kwargs["think"] = think
     response = _local_client().chat(
         model=REVIEW_MODEL,
         messages=messages,
         options=options,
         format=response_format,
         keep_alive=REVIEW_KEEP_ALIVE,
+        **chat_kwargs,
     )
     if on_response is not None:
         on_response(response)

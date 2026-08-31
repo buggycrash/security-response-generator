@@ -739,6 +739,7 @@ def run_smoke_evaluation(
                     response_format=ANALYST_INCLUSION_SCHEMA,
                     num_predict=ANALYST_INCLUSION_MAX_TOKENS,
                     temperature=ANALYST_INCLUSION_TEMPERATURE,
+                    think=False,
                 )
                 analyst_check = _parse_analyst_inclusion(analyst_raw, narrative)
                 analyst_checks[label] = {"raw": analyst_raw, "parsed": analyst_check}
@@ -1104,14 +1105,6 @@ def _completeness_rows(result: EvaluationResult) -> list[dict[str, Any]]:
             analyst_included = finding.get("analyst_context_included")
             customer_coverage = finding.get("customer_standard_coverage")
             private_coverage = finding.get("private_context_coverage")
-            if not (
-                analyst_included is not True
-                or customer_coverage in {"none", "partial"}
-                or private_coverage in {"none", "partial"}
-                or trial.placeholder_count > 0
-                or trial.forced_completion
-            ):
-                continue
             rows.append(
                 {
                     "case_id": grade.case_id,
@@ -1330,7 +1323,13 @@ def render_summary(result: EvaluationResult, *, color: bool = False) -> str:
                 "yes" if row["forced_completion"] else "no",
                 Text(
                     row["assessment"],
-                    style=("bold red" if color and row["assessment"] == "not_viable" else None),
+                    style=(
+                        "bold red"
+                        if color and row["assessment"] == "not_viable"
+                        else "bold sea_green3"
+                        if color and row["assessment"] == "viable"
+                        else None
+                    ),
                 ),
             )
             previous_case = row["case_id"]

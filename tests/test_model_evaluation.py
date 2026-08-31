@@ -1,6 +1,7 @@
 import json
 import os
 import re
+from pathlib import Path
 
 import pytest
 
@@ -134,6 +135,17 @@ def test_analyst_inclusion_requires_a_verbatim_narrative_quote():
     assert valid["analyst_context_evidence_verified"] is True
     assert invalid["analyst_context_included"] is None
     assert invalid["analyst_context_evidence_verified"] is False
+
+
+def test_analyst_inclusion_marks_empty_content_unverified_without_reraising():
+    # A thinking-capable reviewer model that exhausts its num_predict budget
+    # on hidden reasoning returns empty message content; this must not raise
+    # and must be distinguishable from a parseable "not included" decision.
+    result = model_evaluation._parse_analyst_inclusion("", "Generic SI-5 language.")
+
+    assert result["analyst_context_included"] is None
+    assert result["analyst_context_evidence_verified"] is False
+    assert "could not be parsed" in result["analyst_context_check_reason"]
 
 
 def test_analyst_inclusion_preserves_an_explicit_missing_decision():
@@ -310,6 +322,7 @@ def test_smoke_run_writes_blinded_artifacts(monkeypatch, tmp_path):
             {
                 "num_predict": model_evaluation.ANALYST_INCLUSION_MAX_TOKENS,
                 "temperature": model_evaluation.ANALYST_INCLUSION_TEMPERATURE,
+                "think": False,
             }
         ]
         * 10
@@ -353,7 +366,7 @@ def test_smoke_run_writes_blinded_artifacts(monkeypatch, tmp_path):
     assert "default:latest" in summary
     assert "Performance" in summary and "Automated independent review" in summary
     assert "Automated coverage and completeness checks" in summary
-    assert "All cases" in summary and "clear" in summary
+    assert "viable" in summary
     assert "Human review priorities" in summary
     assert "None identified" in summary
     assert "human prose and style spot-checking is still required" in summary
@@ -431,6 +444,54 @@ def test_explicit_placeholder_count_is_deterministic():
 """
 
     assert model_evaluation.count_placeholders(response) == 2
+
+
+def test_completeness_rows_include_clean_viable_trials():
+    finding = json.loads(_grade_reply())
+    finding.update(
+        analyst_context_included=True,
+        analyst_context_evidence_verified=True,
+    )
+    trial = model_evaluation.TrialRecord(
+        role="candidate",
+        model="candidate:latest",
+        case_id="si5-context",
+        control_id="SI-5",
+        seed=42,
+        phase="cold",
+        wall_seconds=1.0,
+        response_text="A clean response.",
+        model_calls=[],
+        forced_completion=False,
+        residency=None,
+        embedding_residency=None,
+        placeholder_count=0,
+    )
+    result = model_evaluation.EvaluationResult(
+        candidate_model="candidate:latest",
+        comparison_model="comparison:latest",
+        grader_model="grader:latest",
+        profile="smoke",
+        output_dir=Path("unused"),
+        trials=[trial],
+        grades=[
+            model_evaluation.GradeRecord(
+                case_id="si5-context",
+                response_a_role="candidate",
+                response_b_role="comparison",
+                parsed={"response_a": finding},
+                raw={"response_a": _grade_reply()},
+            )
+        ],
+    )
+
+    rows = model_evaluation._completeness_rows(result)
+
+    assert len(rows) == 1
+    assert rows[0]["assessment"] == "viable"
+
+    summary = model_evaluation.render_summary(result, color=True)
+    assert "\x1b[" in summary  # colored output was requested and rendered
 
 
 def test_one_explicit_placeholder_prevents_viable_assessment():
