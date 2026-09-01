@@ -155,6 +155,18 @@ class EvaluationCase:
 
 
 @dataclass(frozen=True)
+class CaseMetadata:
+    """Reporting-only fixture metadata: never passed to generate() or review_messages()."""
+
+    case_id: str
+    suite_version: str
+    tags: tuple[str, ...]
+    description: str
+    customer_chunks_present: bool
+    private_chunks_present: bool
+
+
+@dataclass(frozen=True)
 class TrialSpec:
     case_id: str
     seed: int
@@ -225,6 +237,7 @@ class EvaluationResult:
     status: str = "completed"
     incomplete_operation: dict[str, Any] | None = None
     pruned_runs: list[str] = field(default_factory=list)
+    model_block_order: list[str] = field(default_factory=list)
 
 
 class EvaluationInterrupted(Exception):
@@ -262,6 +275,116 @@ def load_smoke_cases() -> list[EvaluationCase]:
     return [EvaluationCase(**item, rubric=list(rubric)) for item in data["cases"]]
 
 
+def _load_standard_document() -> dict[str, Any]:
+    path = files("security_response_generator").joinpath("evaluation_data/standard.json")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if data.get("profile") != "standard" or not isinstance(data.get("cases"), list):
+        raise ValueError("The bundled standard evaluation profile is invalid.")
+    rubric = data.get("rubric")
+    if (
+        not isinstance(rubric, list)
+        or not rubric
+        or not all(isinstance(item, str) and item.strip() for item in rubric)
+    ):
+        raise ValueError("The bundled standard evaluation rubric is invalid.")
+    suite_version = data.get("suite_version")
+    if not isinstance(suite_version, str) or not suite_version.strip():
+        raise ValueError("The bundled standard evaluation suite_version is invalid.")
+    return data
+
+
+def load_standard_cases() -> list[EvaluationCase]:
+    """Prompt/grading path: mirrors load_smoke_cases() exactly. Never carries metadata."""
+    data = _load_standard_document()
+    rubric = list(data["rubric"])
+    return [
+        EvaluationCase(
+            **{key: value for key, value in item.items() if key != "metadata"},
+            rubric=rubric,
+        )
+        for item in data["cases"]
+    ]
+
+
+def load_standard_case_metadata() -> dict[str, CaseMetadata]:
+    """Stats/sampling/reporting path only: never passed to generate() or review_messages()."""
+    data = _load_standard_document()
+    suite_version = data["suite_version"]
+    return {
+        item["id"]: CaseMetadata(
+            case_id=item["id"],
+            suite_version=suite_version,
+            tags=tuple(item.get("metadata", {}).get("tags", ())),
+            description=item.get("metadata", {}).get("description", ""),
+            customer_chunks_present=bool(item.get("customer_chunks")),
+            private_chunks_present=bool(item.get("private_chunks")),
+        )
+        for item in data["cases"]
+    }
+
+
+def build_schedule(case_ids: tuple[str, ...], seeds: tuple[int, ...]) -> tuple[TrialSpec, ...]:
+    """Build a case-major, seed-minor schedule where only the first trial is cold.
+
+    Every task in a standard-profile block gets identical seed coverage, so
+    (unlike smoke's hand-authored per-case phase list) exactly one trial in
+    the whole block is measured cold; every other trial is warm and feeds
+    the performance table, enabling per-task seed-consistency statistics.
+    """
+    specs = [
+        TrialSpec(case_id=case_id, seed=seed, phase="warm")
+        for case_id in case_ids
+        for seed in seeds
+    ]
+    if specs:
+        specs[0] = TrialSpec(case_id=specs[0].case_id, seed=specs[0].seed, phase="cold")
+    return tuple(specs)
+
+
+STANDARD_SEEDS = (42, 43, 44)
+STANDARD_SCHEDULE = build_schedule(tuple(case.id for case in load_standard_cases()), STANDARD_SEEDS)
+STANDARD_RESPONSE_TRIALS = len(STANDARD_SCHEDULE) * 2
+STANDARD_GRADER_CALLS = STANDARD_RESPONSE_TRIALS * 2
+STANDARD_ESTIMATE = "approximately 30-120 minutes"
+
+
+@dataclass(frozen=True)
+class EvaluationProfile:
+    name: str
+    label: str
+    load_cases: Callable[[], list[EvaluationCase]]
+    schedule: tuple[TrialSpec, ...]
+    response_trials: int
+    grader_calls: int
+    estimate: str
+
+
+PROFILES: dict[str, EvaluationProfile] = {
+    "smoke": EvaluationProfile(
+        name="smoke",
+        label="SMOKE EVALUATION - NOT A MODEL-QUALIFICATION RESULT",
+        load_cases=load_smoke_cases,
+        schedule=SMOKE_SCHEDULE,
+        response_trials=SMOKE_RESPONSE_TRIALS,
+        grader_calls=SMOKE_GRADER_CALLS,
+        estimate=SMOKE_ESTIMATE,
+    ),
+    "standard": EvaluationProfile(
+        name="standard",
+        label="STANDARD EVALUATION - ADVISORY, NOT AUTOMATIC QUALIFICATION",
+        load_cases=load_standard_cases,
+        schedule=STANDARD_SCHEDULE,
+        response_trials=STANDARD_RESPONSE_TRIALS,
+        grader_calls=STANDARD_GRADER_CALLS,
+        estimate=STANDARD_ESTIMATE,
+    ),
+}
+
+
+def _profile_label(profile: str) -> str:
+    return PROFILES[profile].label
+
+
 def normalize_model_name(model: str) -> str:
     value = model.strip().lower()
     if not value:
@@ -279,7 +402,9 @@ def installed_model_names() -> list[str]:
     return sorted(model.model for model in response.models if model.model)
 
 
-def validate_preflight(candidate: str, comparison: str, grader: str, output_root: Path) -> None:
+def validate_preflight(
+    candidate: str, comparison: str, grader: str, output_root: Path, *, profile: str = "standard"
+) -> None:
     required_models = (candidate, comparison, grader, config.EMBEDDING_MODEL)
     for model in required_models:
         _require_local_model(model)
@@ -304,7 +429,7 @@ def validate_preflight(candidate: str, comparison: str, grader: str, output_root
         pulls = "\n".join(f"  ollama pull {model}" for model in missing)
         raise ValueError(f"Required local model(s) are not installed:\n{pulls}")
 
-    load_smoke_cases()
+    PROFILES[profile].load_cases()
     existing_parent = output_root
     while not existing_parent.exists() and existing_parent != existing_parent.parent:
         existing_parent = existing_parent.parent
@@ -384,10 +509,10 @@ def _blind_roles(case_index: int) -> tuple[str, str]:
     return ("candidate", "comparison") if case_index % 2 == 0 else ("comparison", "candidate")
 
 
-def _numbered_schedule() -> list[tuple[TrialSpec, int]]:
+def _numbered_schedule(schedule: tuple[TrialSpec, ...]) -> list[tuple[TrialSpec, int]]:
     case_counts: Counter[str] = Counter()
     numbered = []
-    for spec in SMOKE_SCHEDULE:
+    for spec in schedule:
         case_counts[spec.case_id] += 1
         numbered.append((spec, case_counts[spec.case_id]))
     return numbered
@@ -593,11 +718,50 @@ def run_smoke_evaluation(
     output_root: Path,
     on_status: Callable[[str], None] | None = None,
 ) -> EvaluationResult:
-    cases = load_smoke_cases()
+    return _run_evaluation(
+        PROFILES["smoke"],
+        candidate,
+        comparison,
+        generate=generate,
+        output_root=output_root,
+        on_status=on_status,
+    )
+
+
+def run_evaluation(
+    profile_name: str,
+    candidate: str,
+    comparison: str,
+    *,
+    generate: Callable[[EvaluationCase, str, int, str], GenerationOutput],
+    output_root: Path,
+    on_status: Callable[[str], None] | None = None,
+) -> EvaluationResult:
+    return _run_evaluation(
+        PROFILES[profile_name],
+        candidate,
+        comparison,
+        generate=generate,
+        output_root=output_root,
+        on_status=on_status,
+    )
+
+
+def _run_evaluation(
+    profile: EvaluationProfile,
+    candidate: str,
+    comparison: str,
+    *,
+    generate: Callable[[EvaluationCase, str, int, str], GenerationOutput],
+    output_root: Path,
+    on_status: Callable[[str], None] | None = None,
+) -> EvaluationResult:
+    cases = profile.load_cases()
     cases_by_id = {case.id: case for case in cases}
     case_positions = {case.id: index for index, case in enumerate(cases)}
     trials: list[TrialRecord] = []
     grades: list[GradeRecord] = []
+    model_block_order: list[str] = []
     output_dir = _create_output_dir(output_root, candidate)
     incomplete_operation: dict[str, Any] | None = None
 
@@ -606,16 +770,18 @@ def run_smoke_evaluation(
             candidate_model=candidate,
             comparison_model=comparison,
             grader_model=config.REVIEW_MODEL,
-            profile="smoke",
+            profile=profile.name,
             output_dir=output_dir,
             trials=trials,
             grades=grades,
             status=status,
             incomplete_operation=incomplete_operation,
+            model_block_order=list(model_block_order),
         )
 
     try:
         for role, model in (("candidate", candidate), ("comparison", comparison)):
+            model_block_order.append(role)
             incomplete_operation = {
                 "stage": "preparation",
                 "role": role,
@@ -628,7 +794,9 @@ def run_smoke_evaluation(
             # identical chunks. Keep the production embedding model resident anyway,
             # since a viable workstation default must coexist with it during normal use.
             embed_query("SRG generation-model evaluation warm-up")
-            for index, (spec, case_trial_number) in enumerate(_numbered_schedule(), start=1):
+            for index, (spec, case_trial_number) in enumerate(
+                _numbered_schedule(profile.schedule), start=1
+            ):
                 case = cases_by_id[spec.case_id]
                 incomplete_operation = {
                     "stage": "generation",
@@ -642,7 +810,7 @@ def run_smoke_evaluation(
                 }
                 if on_status:
                     on_status(
-                        f"Generating {role} trial {index}/{len(SMOKE_SCHEDULE)} "
+                        f"Generating {role} trial {index}/{len(profile.schedule)} "
                         f"({case.control_id}, {spec.phase})..."
                     )
                 start = time.perf_counter()
@@ -686,7 +854,9 @@ def run_smoke_evaluation(
                         f"{role} trial: {', '.join(missing)}"
                     )
 
-        for grade_index, (spec, case_trial_number) in enumerate(_numbered_schedule(), start=1):
+        for grade_index, (spec, case_trial_number) in enumerate(
+            _numbered_schedule(profile.schedule), start=1
+        ):
             case = cases_by_id[spec.case_id]
             case_index = case_positions[case.id]
             role_a, role_b = _blind_roles(case_index)
@@ -732,7 +902,7 @@ def run_smoke_evaluation(
                     on_status(
                         f"Checking analyst context for {case.control_id} trial "
                         f"{case_trial_number} {label.replace('_', ' ').title()} "
-                        f"({analyst_call_index}/{SMOKE_GRADER_CALLS})..."
+                        f"({analyst_call_index}/{profile.grader_calls})..."
                     )
                 analyst_raw = review_messages(
                     _analyst_inclusion_messages(case, trial_records[role].response_text),
@@ -749,7 +919,7 @@ def run_smoke_evaluation(
                     on_status(
                         f"Grading {case.control_id} trial {case_trial_number} "
                         f"{label.replace('_', ' ').title()} independently "
-                        f"({analyst_call_index + 1}/{SMOKE_GRADER_CALLS})..."
+                        f"({analyst_call_index + 1}/{profile.grader_calls})..."
                     )
                 raw = review_messages(
                     _grade_messages(case, trial_records[role].response_text),
@@ -778,8 +948,8 @@ def run_smoke_evaluation(
             cleanup_error = str(cleanup_exc)
         interruption_note = [
             "Model evaluation interrupted by user.",
-            f"Completed response trials: {len(trials)}/{len(SMOKE_SCHEDULE) * 2}",
-            f"Completed grader calls: {_completed_grader_calls(grades)}/{SMOKE_GRADER_CALLS}",
+            f"Completed response trials: {len(trials)}/{profile.response_trials}",
+            f"Completed grader calls: {_completed_grader_calls(grades)}/{profile.grader_calls}",
             "The incomplete operation is excluded from recorded timings and conclusions.",
             f"Incomplete operation: {json.dumps(incomplete_operation, ensure_ascii=False)}",
             (
@@ -981,6 +1151,24 @@ def _timing_cell(values: list[float], limit: float, *, color: bool) -> Text:
     return cell
 
 
+def _warm_timing_cell(values: list[float], limit: float, *, color: bool) -> Text:
+    """Summarize warm-run timings as an average and range rather than every value.
+
+    Individual trial times remain available in results.json; the terminal
+    summary only needs to show whether warm generations were consistently
+    fast, not a wall of near-identical per-trial numbers.
+    """
+    if not values:
+        return Text("missing", style="bold red" if color else None)
+
+    average = sum(values) / len(values)
+    low, high = min(values), max(values)
+    style = "bold dark_orange3" if color and high >= limit else None
+    if len(values) == 1:
+        return Text(f"{average:.1f}s", style=style)
+    return Text(f"avg {average:.1f}s ({low:.1f}-{high:.1f}s, n={len(values)})", style=style)
+
+
 def _role_assessment(grade: GradeRecord, role: str) -> str:
     if grade.parsed is None:
         return "inconclusive"
@@ -1040,6 +1228,17 @@ def _case_grade_summaries(result: EvaluationResult) -> list[dict[str, Any]]:
             }
         )
     return summaries
+
+
+_REASON_LABELS = {
+    "automated_disagreement": "Models disagreed",
+    "high_risk_finding": "Flagged finding (not-viable, missing context, or policy override)",
+    "random_spot_check": "Random spot check",
+}
+
+
+def _humanize_reasons(reasons: list[str]) -> str:
+    return " + ".join(_REASON_LABELS.get(reason, reason) for reason in reasons)
 
 
 def _review_priorities(
@@ -1121,7 +1320,17 @@ def _completeness_rows(result: EvaluationResult) -> list[dict[str, Any]]:
     return rows
 
 
-def render_summary(result: EvaluationResult, *, color: bool = False) -> str:
+def _format_rate(value: float) -> str:
+    return f"{value * 100:.0f}%"
+
+
+def render_summary(
+    result: EvaluationResult,
+    *,
+    color: bool = False,
+    stats: Any | None = None,
+    sampling_manifest: Any | None = None,
+) -> str:
     buffer = StringIO()
     report_console = Console(
         file=buffer,
@@ -1130,7 +1339,7 @@ def render_summary(result: EvaluationResult, *, color: bool = False) -> str:
         color_system="256" if color else None,
         highlight=False,
     )
-    report_console.print("SMOKE EVALUATION - NOT A MODEL-QUALIFICATION RESULT")
+    report_console.print(_profile_label(result.profile))
     report_console.print(f"Grader model: {result.grader_model}")
     report_console.print("Evaluation target: generation model; review/revision pipeline disabled")
     if result.status != "completed":
@@ -1164,7 +1373,7 @@ def render_summary(result: EvaluationResult, *, color: bool = False) -> str:
         performance_table.add_row(
             model,
             _timing_cell(performance["cold"], COLD_LIMIT_SECONDS, color=color),
-            _timing_cell(performance["warm"], WARM_LIMIT_SECONDS, color=color),
+            _warm_timing_cell(performance["warm"], WARM_LIMIT_SECONDS, color=color),
             performance["residency"],
             Text(
                 result_label,
@@ -1255,105 +1464,169 @@ def render_summary(result: EvaluationResult, *, color: bool = False) -> str:
             )
     report_console.print(review_table)
 
-    completeness_rows = _completeness_rows(result)
-    completeness_table = Table(
-        title="Automated coverage and completeness checks", box=box.SIMPLE_HEAVY
-    )
-    completeness_table.add_column("Case")
-    completeness_table.add_column("Model")
-    completeness_table.add_column("Trial")
-    completeness_table.add_column("Analyst")
-    completeness_table.add_column("Customer")
-    completeness_table.add_column("Private")
-    completeness_table.add_column("Placeholders")
-    completeness_table.add_column("Forced call")
-    completeness_table.add_column("Result")
-    if completeness_rows:
-        previous_case = None
-        for row in completeness_rows:
-            analyst_label = (
-                "included"
-                if row["analyst_included"] is True
-                else "missing"
-                if row["analyst_included"] is False
-                else "unverified"
+    if result.profile == "standard":
+        if stats is not None:
+            quality_table = Table(
+                title="Quality (model-level, macro-averaged)", box=box.SIMPLE_HEAVY
             )
-            customer_coverage = row["customer_coverage"] or "not reported"
-            private_coverage = row["private_coverage"] or "not reported"
-            placeholder_style = (
-                "bold red"
-                if color and row["placeholder_count"] >= 2
-                else "bold dark_orange3"
-                if color and row["placeholder_count"] == 1
-                else None
+            quality_table.add_column("Model")
+            quality_table.add_column("Viable")
+            quality_table.add_column("Material edits")
+            quality_table.add_column("Not viable")
+            quality_table.add_column("Inconclusive")
+            for role, model in (
+                ("candidate", result.candidate_model),
+                ("comparison", result.comparison_model),
+            ):
+                rates = stats.macro_assessment_rates.get(role, {})
+                quality_table.add_row(
+                    model,
+                    _format_rate(rates.get("viable", 0.0)),
+                    _format_rate(rates.get("material_edits", 0.0)),
+                    _format_rate(rates.get("not_viable", 0.0)),
+                    _format_rate(rates.get("inconclusive", 0.0)),
+                )
+            report_console.print(quality_table)
+            report_console.print(
+                "Macro rates give every task equal weight, regardless of trial count."
             )
-            completeness_table.add_row(
-                row["case_id"] if row["case_id"] != previous_case else "",
-                row["model"],
-                str(row["trial_number"]),
-                Text(
-                    analyst_label,
-                    style=(
-                        "bold red"
-                        if color and analyst_label == "missing"
-                        else "bold dark_orange3"
-                        if color and analyst_label == "unverified"
-                        else None
-                    ),
-                ),
-                Text(
-                    customer_coverage,
-                    style=(
-                        "bold red"
-                        if color and customer_coverage == "none"
-                        else "bold dark_orange3"
-                        if color and customer_coverage == "partial"
-                        else None
-                    ),
-                ),
-                Text(
-                    private_coverage,
-                    style=(
-                        "bold dark_orange3"
-                        if color and private_coverage in {"none", "partial"}
-                        else None
-                    ),
-                ),
-                Text(str(row["placeholder_count"]), style=placeholder_style),
-                "yes" if row["forced_completion"] else "no",
-                Text(
-                    row["assessment"],
-                    style=(
-                        "bold red"
-                        if color and row["assessment"] == "not_viable"
-                        else "bold sea_green3"
-                        if color and row["assessment"] == "viable"
-                        else None
-                    ),
-                ),
+            report_console.print()
+
+            paired = stats.paired
+            total_pairs = paired.wins + paired.losses + paired.ties
+            head_to_head_table = Table(title="Head-to-head results", box=box.SIMPLE_HEAVY)
+            head_to_head_table.add_column("Result")
+            head_to_head_table.add_column("Trials")
+            head_to_head_table.add_row(
+                f"{result.candidate_model} won",
+                f"{paired.wins} of {total_pairs} ({_format_rate(paired.win_rate)})",
             )
-            previous_case = row["case_id"]
+            head_to_head_table.add_row(
+                f"{result.comparison_model} won",
+                f"{paired.losses} of {total_pairs} ({_format_rate(paired.loss_rate)})",
+            )
+            head_to_head_table.add_row(
+                "Tied", f"{paired.ties} of {total_pairs} ({_format_rate(paired.tie_rate)})"
+            )
+            report_console.print(head_to_head_table)
+            report_console.print(
+                f"Equal-weighted across all {len(stats.task_stats)} tasks, "
+                f"{result.candidate_model} won {_format_rate(paired.macro_task_win_rate)} "
+                "of tasks."
+            )
+            ci_lower, ci_upper = paired.bootstrap_win_rate_ci
+            report_console.print(
+                f"If you reran this evaluation, {result.candidate_model}'s win rate would "
+                f"likely land somewhere between {_format_rate(ci_lower)} and "
+                f"{_format_rate(ci_upper)}."
+            )
+            report_console.print(
+                "This is one comparison run, not a calibrated qualification decision."
+            )
+            report_console.print()
+        else:
+            report_console.print("Standard-profile statistics are unavailable for this summary.")
+            report_console.print()
     else:
-        completeness_table.add_row(
-            "All cases",
-            "All models",
-            "-",
-            "included",
-            "full/n/a",
-            "full/n/a",
-            "0",
-            "no",
-            "clear",
+        completeness_rows = _completeness_rows(result)
+        completeness_table = Table(
+            title="Automated coverage and completeness checks", box=box.SIMPLE_HEAVY
         )
-    report_console.print(completeness_table)
-    report_console.print(
-        "Policy: analyst=missing, customer=none, or 2+ placeholders => not_viable."
-    )
-    report_console.print(
-        "        customer=partial, private=none/partial, or one placeholder => material_edits."
-    )
-    report_console.print("        analyst=unverified prevents a viable result.")
-    report_console.print()
+        completeness_table.add_column("Case")
+        completeness_table.add_column("Model")
+        completeness_table.add_column("Trial")
+        completeness_table.add_column("Analyst")
+        completeness_table.add_column("Customer")
+        completeness_table.add_column("Private")
+        completeness_table.add_column("Placeholders")
+        completeness_table.add_column("Forced call")
+        completeness_table.add_column("Result")
+        if completeness_rows:
+            previous_case = None
+            for row in completeness_rows:
+                analyst_label = (
+                    "included"
+                    if row["analyst_included"] is True
+                    else "missing"
+                    if row["analyst_included"] is False
+                    else "unverified"
+                )
+                customer_coverage = row["customer_coverage"] or "not reported"
+                private_coverage = row["private_coverage"] or "not reported"
+                placeholder_style = (
+                    "bold red"
+                    if color and row["placeholder_count"] >= 2
+                    else "bold dark_orange3"
+                    if color and row["placeholder_count"] == 1
+                    else None
+                )
+                completeness_table.add_row(
+                    row["case_id"] if row["case_id"] != previous_case else "",
+                    row["model"],
+                    str(row["trial_number"]),
+                    Text(
+                        analyst_label,
+                        style=(
+                            "bold red"
+                            if color and analyst_label == "missing"
+                            else "bold dark_orange3"
+                            if color and analyst_label == "unverified"
+                            else None
+                        ),
+                    ),
+                    Text(
+                        customer_coverage,
+                        style=(
+                            "bold red"
+                            if color and customer_coverage == "none"
+                            else "bold dark_orange3"
+                            if color and customer_coverage == "partial"
+                            else None
+                        ),
+                    ),
+                    Text(
+                        private_coverage,
+                        style=(
+                            "bold dark_orange3"
+                            if color and private_coverage in {"none", "partial"}
+                            else None
+                        ),
+                    ),
+                    Text(str(row["placeholder_count"]), style=placeholder_style),
+                    "yes" if row["forced_completion"] else "no",
+                    Text(
+                        row["assessment"],
+                        style=(
+                            "bold red"
+                            if color and row["assessment"] == "not_viable"
+                            else "bold sea_green3"
+                            if color and row["assessment"] == "viable"
+                            else None
+                        ),
+                    ),
+                )
+                previous_case = row["case_id"]
+        else:
+            completeness_table.add_row(
+                "All cases",
+                "All models",
+                "-",
+                "included",
+                "full/n/a",
+                "full/n/a",
+                "0",
+                "no",
+                "clear",
+            )
+        report_console.print(completeness_table)
+        report_console.print(
+            "Policy: analyst=missing, customer=none, or 2+ placeholders => not_viable."
+        )
+        report_console.print(
+            "        customer=partial, private=none/partial, or one placeholder => material_edits."
+        )
+        report_console.print("        analyst=unverified prevents a viable result.")
+        report_console.print()
 
     report_console.print(
         "Automated review checks requirement coverage and defects; it does not score "
@@ -1361,39 +1634,61 @@ def render_summary(result: EvaluationResult, *, color: bool = False) -> str:
     )
     report_console.print()
 
-    review_priorities = _review_priorities(result, grade_summaries)
-    priority_table = Table(title="Human review priorities", box=box.SIMPLE_HEAVY)
-    priority_table.add_column("Case")
-    priority_table.add_column("Model")
-    priority_table.add_column("Review trials")
-    priority_table.add_column("Contradictory grader findings")
-    if review_priorities:
-        previous_case = None
-        for priority in review_priorities:
-            priority_table.add_row(
-                priority["case_id"] if priority["case_id"] != previous_case else "",
-                priority["model"],
-                priority["review_trials"],
-                priority["policy_adjustments"],
+    if result.profile == "standard" and sampling_manifest is not None:
+        priority_table = Table(
+            title="Human review priorities (spot-check sample)", box=box.SIMPLE_HEAVY
+        )
+        priority_table.add_column("Case")
+        priority_table.add_column("Seed")
+        priority_table.add_column("Why review this")
+        total_pairs = len(sampling_manifest.selected) + len(sampling_manifest.excluded)
+        if sampling_manifest.selected:
+            for pair in sampling_manifest.selected:
+                priority_table.add_row(
+                    pair.case_id, str(pair.seed), _humanize_reasons(pair.reasons)
+                )
+            review_instruction = (
+                f"Read these {len(sampling_manifest.selected)} of {total_pairs} response "
+                "pairs in human-review.md; they were chosen because the models disagreed, a "
+                "finding was flagged, or as a random spot check. The rest were not flagged."
             )
-            previous_case = priority["case_id"]
-        review_instruction = (
-            "Start with review-priority trials; a contradictory grader finding means a "
-            "critical finding overrode its assessment label."
-        )
-    elif result.status == "completed" and result.grades:
-        priority_table.add_row("All cases", "All models", "None identified", "None identified")
-        review_instruction = (
-            "No automated review priorities were identified; human prose and style "
-            "spot-checking is still required."
-        )
+        else:
+            priority_table.add_row("-", "-", "No trials available for review")
+            review_instruction = "No trials were available for human review."
     else:
-        priority_table.add_row(
-            "-", "-", "Automated review incomplete", "Automated review incomplete"
-        )
-        review_instruction = (
-            "Automated review is incomplete; inspect the preserved responses and findings."
-        )
+        review_priorities = _review_priorities(result, grade_summaries)
+        priority_table = Table(title="Human review priorities", box=box.SIMPLE_HEAVY)
+        priority_table.add_column("Case")
+        priority_table.add_column("Model")
+        priority_table.add_column("Review trials")
+        priority_table.add_column("Contradictory grader findings")
+        if review_priorities:
+            previous_case = None
+            for priority in review_priorities:
+                priority_table.add_row(
+                    priority["case_id"] if priority["case_id"] != previous_case else "",
+                    priority["model"],
+                    priority["review_trials"],
+                    priority["policy_adjustments"],
+                )
+                previous_case = priority["case_id"]
+            review_instruction = (
+                "Start with review-priority trials; a contradictory grader finding means a "
+                "critical finding overrode its assessment label."
+            )
+        elif result.status == "completed" and result.grades:
+            priority_table.add_row("All cases", "All models", "None identified", "None identified")
+            review_instruction = (
+                "No automated review priorities were identified; human prose and style "
+                "spot-checking is still required."
+            )
+        else:
+            priority_table.add_row(
+                "-", "-", "Automated review incomplete", "Automated review incomplete"
+            )
+            review_instruction = (
+                "Automated review is incomplete; inspect the preserved responses and findings."
+            )
     report_console.print(priority_table)
 
     output_dir = result.output_dir.resolve()
@@ -1412,8 +1707,18 @@ def render_summary(result: EvaluationResult, *, color: bool = False) -> str:
     return report + paths
 
 
-def _jsonable_result(result: EvaluationResult) -> dict[str, Any]:
+def _stats_metrics(stats: Any) -> dict[str, Any]:
+    """Compact rollup of StandardStats for results.json; excludes per-task detail."""
     return {
+        "suite_version": stats.suite_version,
+        "macro_assessment_rates": stats.macro_assessment_rates,
+        "paired": asdict(stats.paired),
+        "hard_failure_counts": stats.hard_failure_counts,
+    }
+
+
+def _jsonable_result(result: EvaluationResult, *, stats: Any | None = None) -> dict[str, Any]:
+    payload = {
         "candidate_model": result.candidate_model,
         "comparison_model": result.comparison_model,
         "grader_model": result.grader_model,
@@ -1426,18 +1731,61 @@ def _jsonable_result(result: EvaluationResult) -> dict[str, Any]:
         "warm_limit_seconds": WARM_LIMIT_SECONDS,
         "memory_warning_bytes": MEMORY_WARNING_BYTES,
         "pruned_runs": result.pruned_runs,
+        "model_block_order": result.model_block_order,
         "trials": [asdict(trial) for trial in result.trials],
         "grades": [asdict(grade) for grade in result.grades],
     }
+    if stats is not None:
+        payload["metrics"] = _stats_metrics(stats)
+    return payload
 
 
-def write_artifacts(result: EvaluationResult, cases: list[EvaluationCase]) -> None:
+def write_artifacts(
+    result: EvaluationResult,
+    cases: list[EvaluationCase],
+    *,
+    sampling_manifest: Any | None = None,
+    stats: Any | None = None,
+) -> None:
     result.output_dir.joinpath("results.json").write_text(
-        json.dumps(_jsonable_result(result), indent=2, ensure_ascii=False) + "\n",
+        json.dumps(_jsonable_result(result, stats=stats), indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
+    if stats is not None:
+        result.output_dir.joinpath("stats.json").write_text(
+            json.dumps(asdict(stats), indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+    if sampling_manifest is not None:
+        manifest_lines = [
+            "# Human-review sampling manifest",
+            "",
+            sampling_manifest.rule_description,
+            "",
+            f"RNG seed: {sampling_manifest.rng_seed}",
+            "",
+            "## Selected pairs",
+            "",
+            "| Case | Seed | Reasons |",
+            "| --- | --- | --- |",
+        ]
+        for pair in sampling_manifest.selected:
+            manifest_lines.append(f"| {pair.case_id} | {pair.seed} | {', '.join(pair.reasons)} |")
+        manifest_lines.extend(
+            (
+                "",
+                f"## Excluded ({len(sampling_manifest.excluded)})",
+                "",
+                ", ".join(f"{case_id}/{seed}" for case_id, seed in sampling_manifest.excluded)
+                or "None.",
+            )
+        )
+        result.output_dir.joinpath("human-review-sampling.md").write_text(
+            "\n".join(manifest_lines) + "\n", encoding="utf-8"
+        )
     result.output_dir.joinpath("summary.txt").write_text(
-        render_summary(result) + "\n", encoding="utf-8"
+        render_summary(result, stats=stats, sampling_manifest=sampling_manifest) + "\n",
+        encoding="utf-8",
     )
 
     grader_findings = [
@@ -1574,15 +1922,32 @@ def write_artifacts(result: EvaluationResult, cases: list[EvaluationCase]) -> No
         responses_dir.joinpath(filename).write_text(trial.response_text + "\n", encoding="utf-8")
 
     case_index = {case.id: index for index, case in enumerate(cases)}
+    sampled_keys = (
+        {(pair.case_id, pair.seed) for pair in sampling_manifest.selected}
+        if sampling_manifest is not None
+        else None
+    )
     worksheet = [
         "# Blinded human review",
         "",
-        "> SMOKE EVALUATION - NOT A MODEL-QUALIFICATION RESULT",
-        "",
-        "Review each pair before opening `answer-key.md`. Record whether A, B, neither,",
-        "or both are viable SRG drafts and note any unsupported claims or material edits.",
+        f"> {_profile_label(result.profile)}",
         "",
     ]
+    if sampled_keys is not None:
+        worksheet.extend(
+            (
+                "> This worksheet contains the deterministic blinded sample described in",
+                "> `human-review-sampling.md`, not every response.",
+                "",
+            )
+        )
+    worksheet.extend(
+        (
+            "Review each pair before opening `answer-key.md`. Record whether A, B, neither,",
+            "or both are viable SRG drafts and note any unsupported claims or material edits.",
+            "",
+        )
+    )
     answer_key = [
         "# Blinded response answer key",
         "",
@@ -1593,19 +1958,28 @@ def write_artifacts(result: EvaluationResult, cases: list[EvaluationCase]) -> No
     for case in cases:
         role_a, role_b = _blind_roles(case_index[case.id])
         answer_key.append(f"- {case.id}: A = {role_a}; B = {role_b}")
-        worksheet.extend((f"## {case.control_id} - {case.id}", "", "### Response A", ""))
         response_a_trials = [
             trial for trial in result.trials if trial.case_id == case.id and trial.role == role_a
         ]
+        response_b_trials = [
+            trial for trial in result.trials if trial.case_id == case.id and trial.role == role_b
+        ]
+        if sampled_keys is not None:
+            response_a_trials = [
+                trial for trial in response_a_trials if (case.id, trial.seed) in sampled_keys
+            ]
+            response_b_trials = [
+                trial for trial in response_b_trials if (case.id, trial.seed) in sampled_keys
+            ]
+            if not response_a_trials and not response_b_trials:
+                continue
+        worksheet.extend((f"## {case.control_id} - {case.id}", "", "### Response A", ""))
         response_a_trials.sort(key=lambda trial: trial.trial_number)
         for trial in response_a_trials:
             if len(response_a_trials) > 1:
                 worksheet.extend((f"#### Trial {trial.trial_number}", ""))
             worksheet.extend((trial.response_text, ""))
         worksheet.extend(("", "### Response B", ""))
-        response_b_trials = [
-            trial for trial in result.trials if trial.case_id == case.id and trial.role == role_b
-        ]
         response_b_trials.sort(key=lambda trial: trial.trial_number)
         for trial in response_b_trials:
             if len(response_b_trials) > 1:

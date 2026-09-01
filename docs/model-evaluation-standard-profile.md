@@ -2,11 +2,19 @@
 
 ## Status and purpose
 
-This is an implementation brief for the planned `standard` profile of
-`srg evaluate-model`. The current `smoke` profile is an MVP for developing and
-debugging the evaluation process. The standard profile is intended to provide
-enough task breadth and repeated trials to decide whether a candidate deserves
-blinded human consideration as a future shipped generation-model default.
+This is the implementation brief for the `standard` profile of
+`srg evaluate-model`, which is now the command's default profile (`--profile
+smoke` opts into the smaller, faster harness-development profile instead).
+The standard profile provides enough task breadth and repeated trials to
+decide whether a candidate deserves blinded human consideration as a future
+shipped generation-model default.
+
+Qualification gates remain uncalibrated: this release reports task-balanced
+statistics, hard-failure counts, and a deterministic blinded human-review
+sample, but it does not yet apply automated pass/fail thresholds. Calibrating
+those gates against known models and blinded human judgments, and authoring
+counterbalanced candidate/comparison ordering, remain future work described
+below.
 
 The standard profile must remain advisory. It can make a candidate ineligible
 and can identify a candidate worth human review, but it must not automatically
@@ -27,13 +35,13 @@ fixed reviewer as evaluation infrastructure.
 | Generated responses | 10 total | 60 total |
 | Grader calls per response | 2 | 2 |
 | Grader calls | 20 total | 120 total |
-| Expected automated runtime | Approximately 10-18 minutes | Initially estimate 60-110 minutes; calibrate after implementation |
+| Expected automated runtime | Approximately 10-18 minutes | Approximately 30-120 minutes |
 | Quality interpretation | Development signal only | Repeated, task-balanced evidence plus mandatory blinded human review |
-| Human review | Inspect priorities and spot-check prose | Review all high-risk/disagreement trials plus a blinded stratified sample |
+| Human review | Inspect priorities and spot-check prose | Spot-check a capped, prioritized sample of up to 5 response pairs |
 
-The standard workload is six times the smoke workload. Models larger than
-SRG's default, mixture-of-experts models, or models that do not fit comfortably
-on the target workstation may take substantially longer.
+The standard workload is six times the smoke workload. The 30-120 minute
+estimate is intentionally wide, covering slower hardware and larger candidate
+models without a separate hardware caveat.
 
 ## Command and confirmation
 
@@ -170,8 +178,11 @@ and comparison order across repeated standard runs.
 Retain the MVP measurements and raw evidence:
 
 - cold wall time, with the current hard threshold of less than 75 seconds;
-- every warm wall time, with the current target of less than 40 seconds;
-- average, median, p95, minimum, and maximum warm time;
+- every warm wall time, with the current target of less than 40 seconds,
+  retained in full in `results.json`; the terminal summary shows only the
+  average and range (e.g. "avg 11.0s (8.2-14.0s, n=29)") rather than listing
+  all 29 individual values or computing median/p95, since anyone who wants
+  finer-grained statistics can derive them from the raw per-trial data;
 - average and peak Ollama-reported model allocation;
 - average combined allocation with the embedding model;
 - average GPU allocation and full-GPU-residency rate;
@@ -230,13 +241,27 @@ collapse the ten task aggregates into a single unexplained pass/fail label.
 
 Automated review still does not measure prose quality, clarity, usefulness to an
 analyst, or assessor effort reliably. Reading all 60 responses is also unlikely
-to remain practical. Generate a blinded review set containing:
+to remain practical.
+
+> **Implementation note:** this section originally proposed an unbounded
+> blinded review set (every disagreement, every high-priority finding, one
+> seeded pair per task, plus a random tie sample) — for ten tasks with
+> realistic disagreement rates, that set can easily exceed 20 pairs, which
+> defeats the purpose of a spot check. The shipped implementation instead
+> caps the sample at 5 response pairs (`STANDARD_MAX_SAMPLE_SIZE` in
+> `model_evaluation_sampling.py`), prioritized by the same signals below and
+> spread across as many distinct tasks as possible, since a reviewer will
+> not realistically read more than a handful of documents. The full
+> selection and exclusion list remains in `human-review-sampling.md` for
+> transparency even though only 5 pairs are surfaced for review.
+
+The review set prioritizes, in order, until the cap is reached:
 
 1. every candidate/comparison pair where their automated assessments differ;
 2. every `not_viable`, analyst-unverified, contradictory, or otherwise
    high-priority finding;
-3. at least one seeded pair from every task; and
-4. a deterministic random sample of remaining automated ties.
+3. spreading selections across as many distinct tasks as possible; and
+4. a deterministic random sample to fill any remaining slots.
 
 The worksheet should ask the human reviewer to judge:
 

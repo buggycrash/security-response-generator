@@ -13,7 +13,14 @@ import typer
 from rich.console import Console
 from rich.progress import BarColumn, MofNCompleteColumn, Progress, TextColumn, TimeElapsedColumn
 
-from security_response_generator import benchmark, config, engagements, model_evaluation
+from security_response_generator import (
+    benchmark,
+    config,
+    engagements,
+    model_evaluation,
+    model_evaluation_sampling,
+    model_evaluation_stats,
+)
 from security_response_generator.generation import bulk_csv
 from security_response_generator.generation.formatting import normalize_to_ascii
 from security_response_generator.generation.prompt import (
@@ -592,9 +599,12 @@ def evaluate_model_command(
         help="Comparison generation model (default: SRG's shipped generation model).",
     ),
     profile: str = typer.Option(
-        "smoke",
+        "standard",
         "--profile",
-        help="Evaluation profile. Only the abbreviated smoke profile is currently available.",
+        help=(
+            "Evaluation profile: 'standard' (task-balanced advisory qualification "
+            "evidence) or 'smoke' (fast development feedback)."
+        ),
     ),
     output_dir: Path = typer.Option(
         config.MODEL_EVALUATION_DIR,
@@ -610,12 +620,18 @@ def evaluate_model_command(
 ) -> None:
     """Compare a candidate generation model with SRG's shipped default.
 
-    The smoke profile uses committed fictional inputs and is intended for rapid
-    development feedback, not final model qualification. It never invokes SRG's
-    review/revision pipeline or reads an active customer engagement.
+    The default standard profile scales a shared harness to task-balanced
+    advisory qualification evidence. The smoke profile (`--profile smoke`)
+    uses the same committed fictional inputs at a much smaller scale, for
+    rapid development feedback rather than qualification evidence. Neither
+    profile invokes SRG's review/revision pipeline or reads an active
+    customer engagement.
     """
-    if profile != "smoke":
-        typer.echo("Only '--profile smoke' is currently available.", err=True)
+    if profile not in model_evaluation.PROFILES:
+        typer.echo(
+            "Only '--profile smoke' or '--profile standard' are currently available.",
+            err=True,
+        )
         raise typer.Exit(code=2)
 
     # Ollama's installed-model query can occasionally take several seconds.
@@ -624,45 +640,77 @@ def evaluate_model_command(
     try:
         with console.status("Checking evaluation prerequisites..."):
             model_evaluation.validate_preflight(
-                candidate_model, compare_to, config.REVIEW_MODEL, output_dir
+                candidate_model, compare_to, config.REVIEW_MODEL, output_dir, profile=profile
             )
     except _SYSTEMIC_ERRORS as exc:
         typer.echo(f"Model evaluation preflight failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
-    cases = model_evaluation.load_smoke_cases()
+    cases = model_evaluation.PROFILES[profile].load_cases()
     comparison_label = (
         "SRG shipped default"
         if model_evaluation.normalize_model_name(compare_to)
         == model_evaluation.normalize_model_name(config.DEFAULT_GENERATION_MODEL)
         else "explicit override"
     )
-    plan = (
-        f"Candidate model:  {candidate_model}\n"
-        f"Comparison model: {compare_to} ({comparison_label})\n"
-        f"Grader model:     {config.REVIEW_MODEL}\n"
-        "Scope:            Generation model only; review/revision is disabled\n"
-        "Profile:          SMOKE - development feedback, not qualification\n"
-        f"Cases:            {len(cases)} fictional control-response tasks\n"
-        f"Response trials:  {model_evaluation.SMOKE_RESPONSE_TRIALS} total\n"
-        f"Grader calls:     {model_evaluation.SMOKE_GRADER_CALLS} total "
-        "(analyst check + assessment per response)\n"
-        "Measurements:     Generation time, memory/GPU residency, requirement coverage\n"
-        "Coverage:         Missing analyst context or no customer coverage = not viable\n"
-        "                  Partial customer or incomplete private coverage = edits\n"
-        "Placeholders:     2+ = not viable; 1 = edits\n"
-        "Quality limit:    Automated review does not score prose quality or writing style\n"
-        f"Estimated time:   {model_evaluation.SMOKE_ESTIMATE}\n"
-        "    Hardware note: Models larger than SRG's default—or mixture-of-experts "
-        "(MoE) models—may take much longer on typical workstations\n"
-        f"Artifacts:        timestamped folder under {output_dir}\n"
-        "Customer data:    No active engagement data will be used\n\n"
-        "Ollama generation models will be loaded and unloaded. After confirmation,\n"
-        "the run is fully noninteractive. If a model asks for missing information,\n"
-        "SRG automatically makes one final call requiring a placeholder-annotated\n"
-        "response based only on the supplied fictional context.\n"
-        "No source documents, indexes, or engagement data will be modified."
-    )
+    if profile == "smoke":
+        plan = (
+            f"Candidate model:  {candidate_model}\n"
+            f"Comparison model: {compare_to} ({comparison_label})\n"
+            f"Grader model:     {config.REVIEW_MODEL}\n"
+            "Scope:            Generation model only; review/revision is disabled\n"
+            "Profile:          SMOKE - development feedback, not qualification\n"
+            f"Cases:            {len(cases)} fictional control-response tasks\n"
+            f"Response trials:  {model_evaluation.SMOKE_RESPONSE_TRIALS} total\n"
+            f"Grader calls:     {model_evaluation.SMOKE_GRADER_CALLS} total "
+            "(analyst check + assessment per response)\n"
+            "Measurements:     Generation time, memory/GPU residency, requirement coverage\n"
+            "Coverage:         Missing analyst context or no customer coverage = not viable\n"
+            "                  Partial customer or incomplete private coverage = edits\n"
+            "Placeholders:     2+ = not viable; 1 = edits\n"
+            "Quality limit:    Automated review does not score prose quality or writing style\n"
+            f"Estimated time:   {model_evaluation.SMOKE_ESTIMATE}\n"
+            "    Hardware note: Models larger than SRG's default—or mixture-of-experts "
+            "(MoE) models—may take much longer on typical workstations\n"
+            f"Artifacts:        timestamped folder under {output_dir}\n"
+            "Customer data:    No active engagement data will be used\n\n"
+            "Ollama generation models will be loaded and unloaded. After confirmation,\n"
+            "the run is fully noninteractive. If a model asks for missing information,\n"
+            "SRG automatically makes one final call requiring a placeholder-annotated\n"
+            "response based only on the supplied fictional context.\n"
+            "No source documents, indexes, or engagement data will be modified."
+        )
+    else:
+        plan = (
+            f"Candidate model:  {candidate_model}\n"
+            f"Comparison model: {compare_to} ({comparison_label})\n"
+            f"Grader model:     {config.REVIEW_MODEL}\n"
+            "Scope:            Generation model only; review/revision is disabled\n"
+            "Profile:          STANDARD - advisory qualification evidence, not an "
+            "automated decision\n"
+            f"Cases:            {len(cases)} fictional control-response tasks\n"
+            f"Trials per task/model: {len(model_evaluation.STANDARD_SEEDS)} (seeds "
+            f"{', '.join(str(seed) for seed in model_evaluation.STANDARD_SEEDS)})\n"
+            f"Response trials:  {model_evaluation.STANDARD_RESPONSE_TRIALS} total\n"
+            f"Grader calls:     {model_evaluation.STANDARD_GRADER_CALLS} total "
+            "(analyst check + assessment per response)\n"
+            "Measurements:     Generation time, memory/GPU residency, requirement coverage, "
+            "task-balanced statistics\n"
+            "Coverage:         Missing analyst context or no customer coverage = not viable\n"
+            "                  Partial customer or incomplete private coverage = edits\n"
+            "Placeholders:     2+ = not viable; 1 = edits\n"
+            "Quality limit:    Automated review does not score prose quality or writing style\n"
+            "Qualification:    Advisory evidence only; qualification gates are not yet "
+            "calibrated and this command never changes SRG's shipped default\n"
+            f"Estimated time:   {model_evaluation.STANDARD_ESTIMATE}\n"
+            f"Artifacts:        timestamped folder under {output_dir}\n"
+            "Customer data:    No active engagement data will be used\n\n"
+            "Ollama generation models will be loaded and unloaded. After confirmation,\n"
+            "the run is fully noninteractive. If a model asks for missing information,\n"
+            "SRG automatically makes one final call requiring a placeholder-annotated\n"
+            "response based only on the supplied fictional context.\n"
+            "No source documents, indexes, or engagement data will be modified."
+        )
     typer.echo(plan)
     if not yes and not typer.confirm("\nProceed?", default=False):
         typer.echo("Evaluation cancelled.")
@@ -671,7 +719,7 @@ def evaluate_model_command(
     # Print a persistent line before any setup work. Rich's animated status can
     # take a moment to become visible while Ollama starts an unloaded embedding
     # model, so this guarantees immediate feedback after confirmation.
-    console.print("\nStarting smoke evaluation...")
+    console.print(f"\nStarting {profile} evaluation...")
     instructions = config.INSTRUCTIONS_PATH.read_text(encoding="utf-8")
 
     def generate_trial(
@@ -737,7 +785,8 @@ def evaluate_model_command(
 
     try:
         with console.status("Preparing model evaluation...") as status:
-            result = model_evaluation.run_smoke_evaluation(
+            result = model_evaluation.run_evaluation(
+                profile,
                 candidate_model,
                 compare_to,
                 generate=generate_trial,
@@ -756,8 +805,35 @@ def evaluate_model_command(
         typer.echo(f"Model evaluation aborted: {exc}", err=True)
         raise typer.Exit(code=1) from exc
 
+    standard_stats = None
+    standard_sampling_manifest = None
+    if profile == "standard" and result.status == "completed":
+        try:
+            metadata = model_evaluation.load_standard_case_metadata()
+            standard_stats = model_evaluation_stats.compute_standard_stats(result, metadata)
+            standard_sampling_manifest = model_evaluation_sampling.build_human_review_sample(result)
+            model_evaluation.write_artifacts(
+                result,
+                cases,
+                stats=standard_stats,
+                sampling_manifest=standard_sampling_manifest,
+            )
+        except Exception as exc:
+            standard_stats = None
+            standard_sampling_manifest = None
+            typer.echo(
+                f"Warning: standard-profile statistics could not be computed: {exc}", err=True
+            )
+
     typer.echo()
-    typer.echo(model_evaluation.render_summary(result, color=console.color_system is not None))
+    typer.echo(
+        model_evaluation.render_summary(
+            result,
+            color=console.color_system is not None,
+            stats=standard_stats,
+            sampling_manifest=standard_sampling_manifest,
+        )
+    )
 
 
 @app.command("benchmark")
