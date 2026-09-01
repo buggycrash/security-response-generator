@@ -1,0 +1,193 @@
+{
+  "profile": "standard",
+  "suite_version": "standard-v1",
+  "description": "Task-balanced generation-model comparison across ten fictional cases for candidate default-model qualification review; advisory evidence only.",
+  "rubric": [
+    "Evaluate customer-standard, private-context, and control-text coverage separately; never treat content from one source as coverage of another, and validation entries cannot substitute for narrative coverage. Analyst-context inclusion is handled by a separate precheck.",
+    "Apply source precedence and check that each source's material actors, relationships, parameters, quantities, and timeframes are preserved without distortion.",
+    "Evaluate relevance against the exact control ID; penalize substantial wrong-control content, but do not demand extra detail beyond that control.",
+    "Treat implementation claims unsupported by the supplied sources as defects; do not require or reward implementation specifics absent from those sources.",
+    "Evaluate validation entries as suggested evidence, not proof of implementation: check that they are plausibly obtainable and clearly connected to narrative claims without demanding evidence beyond the supplied facts."
+  ],
+  "cases": [
+    {
+      "id": "si5-context",
+      "control_id": "SI-5",
+      "context": "CISA alerts are received by the State SOC and forwarded to all system owners via internal controlled channels.",
+      "customer_chunks": [
+        "SI-5 SECURITY ALERTS, ADVISORIES, AND DIRECTIVES\n\nThe State requires threat and vulnerability alerts to be reviewed within 24 hours of receipt and disseminated to affected system owners within 48 hours. The designated external organization is the State ISO."
+      ],
+      "baseline_chunks": [
+        "SI-5 SECURITY ALERTS, ADVISORIES, AND DIRECTIVES\n\nControl ID: SI-5\n\nReceive system security alerts, advisories, and directives from designated external organizations on an ongoing basis; generate internal alerts, advisories, and directives as deemed necessary; disseminate them to designated personnel; implement them within organization-defined time periods; and notify the issuing organization of actions taken."
+      ],
+      "private_chunks": [
+        "DEMO-ECMS forwards application, container, identity, database, and cloud audit logs to Example Sentinel. The security operations team continuously monitors high-priority alerts. Relevant advisories are assigned to the system owner and engineering lead for impact analysis, remediation, and closure tracking."
+      ],
+      "metadata": {
+        "tags": ["multi-source-reconciliation", "analyst-context-retention", "customer-precedence"],
+        "description": "Slightly misaligned analyst, customer, baseline, and private information; tests analyst-context retention, customer-standard interpretation, operational grounding, and consistency."
+      }
+    },
+    {
+      "id": "ac2-negative-fact",
+      "control_id": "AC-2",
+      "context": "There are no shared or group accounts.",
+      "customer_chunks": [
+        "AC-2 ACCOUNT MANAGEMENT\n\nAllowed account types are individual workforce, public user, service, and one documented break-glass emergency account. Shared or generic workforce accounts are prohibited. The Platform Team manages workforce accounts. Workforce accounts are reviewed quarterly and privileged access monthly."
+      ],
+      "baseline_chunks": [
+        "AC-2 ACCOUNT MANAGEMENT\n\nControl ID: AC-2\n\nDefine allowed and prohibited account types; assign account managers; approve and manage account creation, modification, disabling, and removal; monitor account use; review accounts; align account management with personnel changes; and change shared or group account authenticators when individuals leave the group, if such accounts are deployed."
+      ],
+      "private_chunks": [
+        "DEMO-ECMS uses ExampleLogin for public users and an enterprise identity provider for workforce users. Administrative access uses a separate privileged role. Access reviews occur quarterly and when personnel change roles or leave."
+      ],
+      "metadata": {
+        "tags": ["negative-analyst-fact", "inapplicability-avoidance"],
+        "description": "Tests whether \"no shared or group accounts\" is incorporated without incorrectly declaring the control inapplicable."
+      }
+    },
+    {
+      "id": "sc8-enhancement-scope",
+      "control_id": "SC-8(1)",
+      "context": "TLS 1.3 protects the confidentiality and integrity of information in transit.",
+      "customer_chunks": [],
+      "baseline_chunks": [
+        "(1) CRYPTOGRAPHIC PROTECTION\n\nControl ID: SC-8(1)\n\nImplement cryptographic mechanisms to prevent unauthorized disclosure of information and detect changes to information during transmission. TLS and IPsec are examples of mechanisms that protect confidentiality and integrity during transmission."
+      ],
+      "private_chunks": [
+        "Users access DEMO-ECMS through a browser-based application. Requests pass through a cloud load balancer before reaching managed application containers."
+      ],
+      "metadata": {
+        "tags": ["enhancement-scope", "kitchen-sink-resistance"],
+        "description": "Tests a straightforward TLS 1.3 fact, exact enhancement scope, and resistance to unrelated \"kitchen sink\" content."
+      }
+    },
+    {
+      "id": "ia5-parameter-preservation",
+      "control_id": "IA-5",
+      "context": "Break-glass emergency accounts use a physical hardware token stored in a sealed envelope in the SOC safe.",
+      "customer_chunks": [
+        "IA-5 AUTHENTICATOR MANAGEMENT\n\nPassphrases must be at least 16 characters. Privileged account authenticators are changed every 60 days; standard workforce account authenticators are changed every 180 days. Multi-factor authentication is required for all remote access and all administrative access. Accounts are locked for 30 minutes after 5 consecutive failed authentication attempts."
+      ],
+      "baseline_chunks": [
+        "IA-5 AUTHENTICATOR MANAGEMENT\n\nControl ID: IA-5\n\nManage system authenticators by verifying the identity of the individual or device receiving the authenticator; establishing initial authenticator content; ensuring authenticators have sufficient strength of mechanism; establishing procedures for initial distribution, lost, compromised, or damaged authenticators, and revocation; changing default authenticators before first use; refreshing authenticators periodically or when compromised; protecting authenticator content from unauthorized disclosure and modification; and requiring individuals to safeguard authenticators."
+      ],
+      "private_chunks": [
+        "DEMO-ECMS integrates with an enterprise identity provider using SAML for workforce single sign-on. The identity provider enforces the configured password policy and multi-factor authentication requirement for all workforce sign-ins."
+      ],
+      "metadata": {
+        "tags": ["customer-parameter-preservation", "hard-failure-omission"],
+        "description": "Multiple authoritative roles, frequencies, and timeframes where omitting all customer content is a hard failure and partial coverage requires edits."
+      }
+    },
+    {
+      "id": "cm3-private-context",
+      "control_id": "CM-3",
+      "context": "Emergency changes bypass the standard change window and receive after-the-fact review by the Change Advisory Board within one business day.",
+      "customer_chunks": [
+        "CM-3 CONFIGURATION CHANGE CONTROL\n\nAll standard changes require Change Advisory Board (CAB) review and approval before deployment. Emergency changes require after-the-fact CAB review within one business day. All changes are tracked in the change ticketing system."
+      ],
+      "baseline_chunks": [
+        "CM-3 CONFIGURATION CHANGE CONTROL\n\nControl ID: CM-3\n\nDetermine and document the types of changes to the system that are configuration-controlled; review proposed configuration-controlled changes and approve or disapprove such changes with explicit consideration of security and privacy impact; document configuration change decisions; implement approved changes; retain records of configuration-controlled changes; audit and review activities associated with configuration-controlled changes; and coordinate and provide oversight for configuration change control activities."
+      ],
+      "private_chunks": [
+        "DEMO-ECMS change requests are logged in Example ITSM with mandatory fields for risk level, rollback plan, and affected components. The Change Advisory Board meets weekly to review standard changes. Emergency changes are deployed directly by the on-call engineer and logged retroactively for the next CAB meeting."
+      ],
+      "metadata": {
+        "tags": ["relevant-private-context", "soft-failure-omission"],
+        "description": "Material architecture and operations that should appear in the draft but whose partial omission is not a hard failure."
+      }
+    },
+    {
+      "id": "au6-noisy-context",
+      "control_id": "AU-6",
+      "context": "The security team correlates authentication failures across systems on a weekly basis.",
+      "customer_chunks": [
+        "AU-6 AUDIT RECORD REVIEW, ANALYSIS, AND REPORTING\n\nHigh-severity audit alerts are reviewed daily. A summary report of audit findings is delivered to the State ISO weekly."
+      ],
+      "baseline_chunks": [
+        "AU-6 AUDIT RECORD REVIEW, ANALYSIS, AND REPORTING\n\nControl ID: AU-6\n\nReview and analyze system audit records on an organization-defined frequency for indications of inappropriate or unusual activity and the potential impact of that activity; report findings to designated organizational personnel; and adjust the level of audit record review, analysis, and reporting when there is a change in risk."
+      ],
+      "private_chunks": [
+        "DEMO-ECMS forwards authentication, network, and application logs to Example Sentinel. The security operations team reviews high-severity correlation rules daily and produces a weekly trend report for the State ISO.",
+        "In 2019 the legacy on-premises log server, decommissioned in 2021, stored logs locally for 30 days before Example Sentinel was adopted.",
+        "An early architecture draft proposed a 90-day local log retention window, but this was superseded by the current cloud-based retention policy of 400 days documented in DEMO-ECMS-STD-004.",
+        "The engineering team also uses Example Sentinel dashboards to track deployment frequency for release management planning."
+      ],
+      "metadata": {
+        "tags": ["noisy-private-context", "source-selection", "stale-detail-resistance"],
+        "description": "Relevant facts mixed with irrelevant, explicitly old, or conflicting details; tests selection and source precedence without rewarding wholesale copying."
+      }
+    },
+    {
+      "id": "ir6-no-customer-standard",
+      "control_id": "IR-6",
+      "context": "Confirmed incidents are reported to the state CISO's office within one hour of confirmation.",
+      "customer_chunks": [],
+      "baseline_chunks": [
+        "IR-6 INCIDENT REPORTING\n\nControl ID: IR-6\n\nRequire personnel to report suspected incidents to the organizational incident response capability within an organization-defined time period; and report incident information to designated authorities."
+      ],
+      "private_chunks": [
+        "DEMO-ECMS incident response procedures require the on-call engineer to open an incident ticket in Example ITSM and notify the security operations manager through the paging system as soon as an incident is confirmed."
+      ],
+      "metadata": {
+        "tags": ["no-customer-standard", "not-provided-handling"],
+        "description": "Ensures an empty customer source is treated as not_provided, not as missing required content."
+      }
+    },
+    {
+      "id": "cp9-no-private-context",
+      "control_id": "CP-9",
+      "context": "Backups are tested quarterly by restoring to an isolated recovery environment.",
+      "customer_chunks": [
+        "CP-9 SYSTEM BACKUP\n\nIncremental backups occur daily and full backups occur weekly. Backups are encrypted at rest and in transit and retained for 90 days."
+      ],
+      "baseline_chunks": [
+        "CP-9 SYSTEM BACKUP\n\nControl ID: CP-9\n\nConduct backups of user-level information, system-level information, and system documentation, including security- and privacy-related documentation, on an organization-defined frequency; protect the confidentiality, integrity, and availability of backup information; and ensure the capability to recover and reconstitute the system to a known state following a disruption, compromise, or failure."
+      ],
+      "private_chunks": [],
+      "metadata": {
+        "tags": ["no-private-context", "grounded-baseline-response"],
+        "description": "Ensures the model can produce a grounded baseline and analyst-driven response without inventing implementation details."
+      }
+    },
+    {
+      "id": "ra5-neighbor-trap",
+      "control_id": "RA-5",
+      "context": "Vulnerability scans run weekly against all internet-facing systems.",
+      "customer_chunks": [
+        "RA-5 VULNERABILITY MONITORING AND SCANNING\n\nCritical vulnerabilities are remediated within 15 days of confirmation and high vulnerabilities within 30 days. Scan reports are retained for one year."
+      ],
+      "baseline_chunks": [
+        "RA-5 VULNERABILITY MONITORING AND SCANNING\n\nControl ID: RA-5\n\nMonitor and scan for vulnerabilities in the system and hosted applications on an organization-defined frequency and when new vulnerabilities affecting the system are identified; employ vulnerability monitoring tools and techniques; analyze vulnerability scan reports and results; remediate legitimate vulnerabilities within an organization-defined response time; and share information obtained from the vulnerability monitoring process with designated personnel to help eliminate similar vulnerabilities in other systems."
+      ],
+      "private_chunks": [
+        "Weekly authenticated scans are performed using Example Vulnerability Scanner against all internet-facing and internal production systems; results are triaged by the security operations team and tracked to remediation in Example ITSM.",
+        "DEMO-ECMS also conducts an annual formal risk assessment covering threat sources, likelihood, and impact, documented in the system security plan.",
+        "Patching of identified vulnerabilities follows the Example Patch Management process, which applies critical operating-system patches within 72 hours of vendor release as part of flaw remediation."
+      ],
+      "metadata": {
+        "tags": ["control-family-neighbor-trap", "scope-drift-resistance"],
+        "description": "Source material contains true information about a related control; tests exact scope and penalizes material TMI."
+      }
+    },
+    {
+      "id": "sc13-validation-grounding",
+      "control_id": "SC-13",
+      "context": "All cryptographic modules used by DEMO-ECMS are FIPS 140-2 validated.",
+      "customer_chunks": [
+        "SC-13 CRYPTOGRAPHIC PROTECTION\n\nOnly FIPS-validated algorithms and modules approved by the Example State security office may be used for data at rest and in transit."
+      ],
+      "baseline_chunks": [
+        "SC-13 CRYPTOGRAPHIC PROTECTION\n\nControl ID: SC-13\n\nDetermine the cryptographic uses required for the system; and implement the required types of cryptography for each specified cryptographic use, using FIPS-validated or NSA-approved cryptography."
+      ],
+      "private_chunks": [
+        "DEMO-ECMS uses AES-256 encryption for data at rest through the cloud provider's managed key service and TLS 1.3 for data in transit. The managed key service holds FIPS 140-2 Level 2 validation certificate number EX-1234."
+      ],
+      "metadata": {
+        "tags": ["validation-grounding", "evidence-plausibility"],
+        "description": "Tests whether suggested evidence is plausibly obtainable and tied to narrative claims without treating a validation as proof or allowing it to repair a missing narrative fact."
+      }
+    }
+  ]
+}

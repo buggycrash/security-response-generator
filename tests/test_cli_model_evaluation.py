@@ -20,20 +20,22 @@ def _fake_result(tmp_path: Path):
 
 
 def _patch_preflight(monkeypatch):
-    monkeypatch.setattr(cli.model_evaluation, "validate_preflight", lambda *args: None)
+    monkeypatch.setattr(cli.model_evaluation, "validate_preflight", lambda *args, **kwargs: None)
 
 
-def test_evaluate_model_shows_plan_and_defaults_confirmation_to_no(monkeypatch, tmp_path):
+def test_evaluate_model_smoke_profile_shows_plan_and_defaults_confirmation_to_no(
+    monkeypatch, tmp_path
+):
     _patch_preflight(monkeypatch)
     monkeypatch.setattr(
         cli.model_evaluation,
-        "run_smoke_evaluation",
+        "run_evaluation",
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not run")),
     )
 
     result = runner.invoke(
         cli.app,
-        ["evaluate-model", "candidate:latest", "--output-dir", str(tmp_path)],
+        ["evaluate-model", "candidate:latest", "--profile", "smoke", "--output-dir", str(tmp_path)],
         input="\n",
     )
 
@@ -57,15 +59,40 @@ def test_evaluate_model_shows_plan_and_defaults_confirmation_to_no(monkeypatch, 
     assert "Evaluation cancelled" in result.output
 
 
+def test_evaluate_model_defaults_to_standard_profile(monkeypatch, tmp_path):
+    _patch_preflight(monkeypatch)
+    monkeypatch.setattr(
+        cli.model_evaluation,
+        "run_evaluation",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not run")),
+    )
+
+    result = runner.invoke(
+        cli.app,
+        ["evaluate-model", "candidate:latest", "--output-dir", str(tmp_path)],
+        input="\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Profile:          STANDARD" in result.output
+    assert "60 total" in result.output
+    assert "120 total (analyst check + assessment per response)" in result.output
+    assert "Estimated time:   approximately 30-120 minutes" in result.output
+    assert "Hardware note" not in result.output
+    assert "Proceed? [y/N]" in result.output
+    assert "Evaluation cancelled" in result.output
+
+
 def test_evaluate_model_uses_shipped_default_without_compare_flag(monkeypatch, tmp_path):
     _patch_preflight(monkeypatch)
     captured = {}
 
-    def fake_run(candidate, comparison, **kwargs):
+    def fake_run(profile_name, candidate, comparison, **kwargs):
+        captured["profile_name"] = profile_name
         captured["models"] = (candidate, comparison)
         return _fake_result(tmp_path)
 
-    monkeypatch.setattr(cli.model_evaluation, "run_smoke_evaluation", fake_run)
+    monkeypatch.setattr(cli.model_evaluation, "run_evaluation", fake_run)
     monkeypatch.setattr(cli.model_evaluation, "render_summary", lambda result, **kwargs: "summary")
 
     result = runner.invoke(
@@ -80,26 +107,63 @@ def test_evaluate_model_uses_shipped_default_without_compare_flag(monkeypatch, t
     )
 
     assert result.exit_code == 0, result.output
+    assert captured["profile_name"] == "standard"
     assert captured["models"] == (
         "candidate:latest",
         cli.config.DEFAULT_GENERATION_MODEL,
     )
-    assert "Starting smoke evaluation..." in result.output
+    assert "Starting standard evaluation..." in result.output
     assert "summary" in result.output
 
 
 def test_evaluate_model_rejects_unknown_profile(monkeypatch):
     result = runner.invoke(
         cli.app,
-        ["evaluate-model", "candidate:latest", "--profile", "standard"],
+        ["evaluate-model", "candidate:latest", "--profile", "bogus"],
     )
 
     assert result.exit_code == 2
-    assert "Only '--profile smoke'" in result.output
+    assert "Only '--profile smoke' or '--profile standard'" in result.output
+
+
+def test_evaluate_model_accepts_standard_profile_and_shows_standard_counts(monkeypatch, tmp_path):
+    _patch_preflight(monkeypatch)
+    captured = {}
+
+    def fake_run(profile_name, candidate, comparison, **kwargs):
+        captured["profile_name"] = profile_name
+        return _fake_result(tmp_path)
+
+    monkeypatch.setattr(cli.model_evaluation, "run_evaluation", fake_run)
+    monkeypatch.setattr(cli.model_evaluation, "render_summary", lambda result, **kwargs: "summary")
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "evaluate-model",
+            "candidate:latest",
+            "--profile",
+            "standard",
+            "--output-dir",
+            str(tmp_path),
+            "--yes",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["profile_name"] == "standard"
+    assert "Profile:          STANDARD" in result.output
+    assert "60 total" in result.output
+    assert "120 total (analyst check + assessment per response)" in result.output
+    assert "qualification gates are not yet calibrated" in result.output
+    assert "Estimated time:   approximately 30-120 minutes" in result.output
+    assert "Hardware note" not in result.output
+    assert "Starting standard evaluation..." in result.output
+    assert "summary" in result.output
 
 
 def test_evaluate_model_prints_heading_before_slow_preflight(monkeypatch, tmp_path):
-    def fail_preflight(*args):
+    def fail_preflight(*args, **kwargs):
         raise ConnectionError("Ollama unavailable")
 
     monkeypatch.setattr(cli.model_evaluation, "validate_preflight", fail_preflight)
@@ -122,7 +186,7 @@ def test_evaluate_model_reports_preserved_artifacts_on_interrupt(monkeypatch, tm
     def interrupt(*args, **kwargs):
         raise cli.model_evaluation.EvaluationInterrupted(artifact_dir)
 
-    monkeypatch.setattr(cli.model_evaluation, "run_smoke_evaluation", interrupt)
+    monkeypatch.setattr(cli.model_evaluation, "run_evaluation", interrupt)
 
     result = runner.invoke(
         cli.app,

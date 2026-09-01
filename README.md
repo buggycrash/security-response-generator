@@ -161,19 +161,23 @@ Chatting can be very useful when the user is still learning the customer standar
 
 ## Evaluate a candidate generation model
 
-Run a short, repeatable comparison between an installed candidate model and
-SRG's shipped generation model:
+Run a repeatable, task-balanced comparison between an installed candidate
+model and SRG's shipped generation model:
 
 ```bash
 srg evaluate-model <candidate-model>
 ```
 
 The command first shows the fictional test cases, model-call count, estimated
-10-18 minute duration, and artifact location, then defaults to **no** at its
-confirmation prompt. The current `smoke` profile is intended for development
-feedback rather than final default-model qualification. See
+30-120 minute duration, and artifact location, then defaults to **no** at its
+confirmation prompt. This default `standard` profile produces advisory
+evidence for possible default-model qualification review (ten tasks, three
+seeds, sixty responses) — see
+[Standard profile](docs/technical-readme.md#standard-profile). Add `--profile
+smoke` for a much faster, smaller-scale run intended for development feedback
+rather than qualification evidence; see
 [Evaluate a generation model](docs/technical-readme.md#evaluate-a-generation-model)
-for its timing thresholds, quality checks, and output artifacts.
+for smoke's timing thresholds, quality checks, and output artifacts.
 
 ## Common next steps
 

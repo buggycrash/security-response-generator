@@ -464,12 +464,19 @@ become available.
 
 ## Evaluate a generation model
 
-`srg evaluate-model` runs a short, repeatable comparison between an installed
+`srg evaluate-model` runs a repeatable comparison between an installed
 candidate generation model and SRG's shipped default (`gemma4:e4b-it-qat`):
 
 ```bash
 srg evaluate-model llama3.1:8b
 ```
+
+By default this runs the `standard` profile: ten versioned fictional tasks,
+three seeds each, producing task-balanced advisory evidence for possible
+default-model qualification review. See
+[Standard profile](#standard-profile) below and the
+[standard-profile implementation brief](model-evaluation-standard-profile.md)
+for the full design rationale.
 
 `--compare-to MODEL` is available for an explicit comparison, but is not
 required. The command does not automatically download models; if the candidate,
@@ -491,11 +498,13 @@ and grader models, scope, case and trial counts, estimated duration, and output
 location. It then asks `Proceed? [y/N]`, defaulting to no. `--yes` explicitly
 accepts the displayed plan for unattended use.
 
-Only the abbreviated `smoke` profile is currently available. It is designed to
-make development of the evaluation workflow reasonably quick, not to qualify a
-new default model. The planned workload, reporting, human sampling, and
-qualification process for the next phase are captured in the
-[standard-profile implementation brief](model-evaluation-standard-profile.md):
+Pass `--profile smoke` for a much smaller, faster run (three tasks, ten
+responses) intended for rapid development feedback on the evaluation harness
+itself, not for qualification evidence. The remainder of this section
+describes the smoke profile's mechanics in detail; the standard profile
+reuses every one of them (see [Standard profile](#standard-profile) for what
+changes at the larger scale). The smoke profile behaves exactly as described
+here:
 
 - The candidate and comparison model each generate five responses: three SI-5
   trials using seeds 42, 43, and 44, one AC-2 trial, and one SC-8(1) trial.
@@ -632,11 +641,76 @@ evaluation run directories under the selected output parent and permanently
 removes older runs after each completed or partially completed evaluation.
 Unrelated folders and symlinks in that parent are not removed.
 
-Every report is labeled `SMOKE EVALUATION - NOT A MODEL-QUALIFICATION RESULT`.
-Automated grading is advisory; a future standard profile will need a larger
-task bank, more trials, and calibrated human acceptance criteria before it can
-support changing SRG's default. Reviewer-model qualification is also future
-work and will require a different suite.
+Every smoke report is labeled `SMOKE EVALUATION - NOT A MODEL-QUALIFICATION
+RESULT`. Automated grading is advisory in both profiles. Reviewer-model
+qualification remains future work and will require a different suite.
+
+### Standard profile
+
+```bash
+srg evaluate-model llama3.1:8b --profile standard
+```
+
+The standard profile reuses every mechanism above (the same two-call grading
+architecture, deterministic policy, model lifecycle, ejection handling,
+interruption handling, and 20-run retention pool shared with smoke) and scales
+it to ten versioned fictional tasks, each run with three fixed seeds (42, 43,
+and 44) per generation model:
+
+```text
+10 tasks x 3 seeds x 2 generation models = 60 responses
+60 responses x 2 independent grader calls = 120 grader calls
+```
+
+- Cold/warm timing generalizes from smoke's per-case phase list to one rule:
+  the first request generated in each model's 30-trial block is measured
+  cold, and every other trial in that block is warm and feeds the
+  performance table. This yields per-task seed-consistency evidence across
+  all ten tasks instead of only SI-5. The terminal performance table shows an
+  average and range for the warm trials (e.g. "avg 11.0s (8.2-14.0s, n=29)")
+  rather than listing all 29 individual timings; every raw per-trial value is
+  still recorded in `results.json` for anyone who wants it.
+- The run records `model_block_order` (which generation model's block ran
+  first) in `results.json`, raw data for a future calibration study on
+  counterbalancing; this release does not counterbalance automatically.
+- Terminal output stays compact: the same performance and memory tables as
+  smoke, ten per-task aggregate rows (not sixty per-trial rows) in the
+  automated independent review table, a macro-averaged quality table (each of
+  the ten tasks weighted equally, so one systematically failed task cannot be
+  hidden by three easy ones), and a head-to-head results table naming each
+  model directly (e.g. "phi4-mini:latest won 2 of 30 trials"), followed by a
+  plain-language likely-range sentence derived from a stdlib-only bootstrap
+  over the win-rate proportion (not the raw win/loss/tie score, which is on a
+  different scale). These paired outcomes are descriptive evidence only,
+  explicitly not proof of model quality or a qualification decision.
+  Hard-failure counts (analyst-context omission, total customer-source
+  omission, repeated placeholders) are not shown as a separate terminal
+  table — that detail is already visible per task in the automated
+  independent review table and remains fully available in `results.json` and
+  `stats.json`.
+- Human review is treated as a small spot check, not an exhaustive audit: the
+  terminal "Human review priorities" table and the `human-review.md`
+  worksheet are both capped at 5 response pairs, since nobody reads 60 (or
+  even 20) documents. Pairs where the two models disagreed, or where either
+  response was flagged (`not_viable`, missing/unverified analyst context, or
+  a contradictory deterministic-policy adjustment), are selected first and
+  spread across as many different tasks as possible; if fewer than 5 pairs
+  are flagged, the rest are filled with a deterministic random spot check
+  (seeded locally, so it never disturbs Python's global random state). Every
+  pair's selection reason is shown in plain language (e.g. "Models
+  disagreed"). `human-review-sampling.md` records the full manifest,
+  including every excluded pair, for transparency; `answer-key.md` still
+  covers every task.
+- Every report is labeled `STANDARD EVALUATION - ADVISORY, NOT AUTOMATIC
+  QUALIFICATION`. This first implementation reports evidence only: it does
+  not yet apply calibrated pass/fail qualification gates, and it never
+  changes SRG's shipped default. A candidate becoming "eligible for human
+  consideration" is a distinct, future, calibration-driven decision from
+  "approved as SRG's new default," which remains solely the repository
+  owner's call.
+- Expect approximately 30-120 minutes; the range is intentionally wide to
+  cover slower hardware and larger candidate models without a separate
+  hardware caveat.
 
 ## Keep_alive, temperature, and seed
 

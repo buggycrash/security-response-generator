@@ -1,6 +1,8 @@
+import dataclasses
 import json
 import os
 import re
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -74,6 +76,133 @@ def test_smoke_profile_has_expected_compact_schedule():
     assert "suggested evidence, not proof of implementation" in rubric
     assert "do not require or reward implementation specifics" in rubric
     assert not any(term in rubric for term in ("CISA", "TLS 1.3", "shared or group"))
+
+
+def test_evaluation_case_has_no_metadata_field():
+    field_names = {f.name for f in dataclasses.fields(model_evaluation.EvaluationCase)}
+
+    assert field_names == {
+        "id",
+        "control_id",
+        "context",
+        "customer_chunks",
+        "baseline_chunks",
+        "private_chunks",
+        "rubric",
+    }
+
+
+def test_standard_profile_has_ten_versioned_cases_with_distinct_control_ids():
+    cases = model_evaluation.load_standard_cases()
+    metadata = model_evaluation.load_standard_case_metadata()
+
+    assert len(cases) == 10
+    assert len(cases) == len({case.id for case in cases})
+    assert cases[0].control_id == "SI-5"
+    assert cases[1].control_id == "AC-2"
+    assert cases[2].control_id == "SC-8(1)"
+    assert set(metadata) == {case.id for case in cases}
+    assert all(entry.suite_version == "standard-v1" for entry in metadata.values())
+    assert all(entry.description for entry in metadata.values())
+    assert all(case.rubric == cases[0].rubric for case in cases)
+    # The first three standard cases are the smoke cases reused verbatim.
+    smoke_cases = {case.id: case for case in model_evaluation.load_smoke_cases()}
+    for case in cases[:3]:
+        smoke_case = smoke_cases[case.id]
+        assert case.context == smoke_case.context
+        assert case.customer_chunks == smoke_case.customer_chunks
+        assert case.private_chunks == smoke_case.private_chunks
+
+
+def test_standard_case_metadata_source_presence_matches_chunks():
+    cases = {case.id: case for case in model_evaluation.load_standard_cases()}
+    metadata = model_evaluation.load_standard_case_metadata()
+
+    for case_id, entry in metadata.items():
+        case = cases[case_id]
+        assert entry.customer_chunks_present == bool(case.customer_chunks)
+        assert entry.private_chunks_present == bool(case.private_chunks)
+
+
+def test_standard_case_metadata_never_leaks_into_grader_or_analyst_payloads():
+    case = model_evaluation.load_standard_cases()[3]
+    metadata = model_evaluation.load_standard_case_metadata()[case.id]
+
+    grade_messages = model_evaluation._grade_messages(
+        case, "Narrative text.\n[Validations]\nSome evidence."
+    )
+    grade_payload = json.loads(grade_messages[1]["content"])
+    assert set(grade_payload) == {
+        "control_id",
+        "customer_standard",
+        "nist_baseline",
+        "private_context",
+        "rubric",
+        "response",
+    }
+
+    analyst_messages = model_evaluation._analyst_inclusion_messages(case, "Narrative text.")
+    analyst_payload = json.loads(analyst_messages[1]["content"])
+    assert set(analyst_payload) == {"analyst_context", "narrative"}
+
+    serialized = "\n".join(m["content"] for m in grade_messages + analyst_messages)
+    assert metadata.suite_version not in serialized
+    assert metadata.description not in serialized
+    for tag in metadata.tags:
+        assert tag not in serialized
+
+
+def test_standard_profile_has_expected_schedule():
+    cases = model_evaluation.load_standard_cases()
+
+    assert len(cases) == 10
+    assert len(model_evaluation.STANDARD_SCHEDULE) == 30
+    phases = [spec.phase for spec in model_evaluation.STANDARD_SCHEDULE]
+    assert phases[0] == "cold"
+    assert phases[1:] == ["warm"] * 29
+    assert model_evaluation.STANDARD_RESPONSE_TRIALS == 60
+    assert model_evaluation.STANDARD_GRADER_CALLS == 120
+    counts = Counter(spec.case_id for spec in model_evaluation.STANDARD_SCHEDULE)
+    assert counts == {case.id: 3 for case in cases}
+    for case in cases:
+        case_seeds = [
+            spec.seed for spec in model_evaluation.STANDARD_SCHEDULE if spec.case_id == case.id
+        ]
+        assert case_seeds == [42, 43, 44]
+
+
+def test_build_schedule_marks_only_the_first_trial_cold():
+    schedule = model_evaluation.build_schedule(("a", "b"), (1, 2))
+
+    assert schedule == (
+        model_evaluation.TrialSpec("a", 1, "cold"),
+        model_evaluation.TrialSpec("a", 2, "warm"),
+        model_evaluation.TrialSpec("b", 1, "warm"),
+        model_evaluation.TrialSpec("b", 2, "warm"),
+    )
+
+
+def test_profiles_registry_exposes_smoke_and_standard():
+    assert set(model_evaluation.PROFILES) == {"smoke", "standard"}
+    assert model_evaluation.PROFILES["smoke"].schedule == model_evaluation.SMOKE_SCHEDULE
+    assert model_evaluation.PROFILES["standard"].schedule == model_evaluation.STANDARD_SCHEDULE
+    assert model_evaluation._profile_label("smoke") == (
+        "SMOKE EVALUATION - NOT A MODEL-QUALIFICATION RESULT"
+    )
+
+
+def test_load_standard_cases_rejects_stray_top_level_case_keys():
+    with pytest.raises(TypeError):
+        model_evaluation.EvaluationCase(
+            id="x",
+            control_id="X-1",
+            context="c",
+            customer_chunks=[],
+            baseline_chunks=[],
+            private_chunks=[],
+            rubric=["r"],
+            severity="critical",
+        )
 
 
 def test_grader_instruction_requires_an_independent_absolute_assessment():
@@ -817,7 +946,12 @@ def test_terminal_summary_colors_failures_and_only_offending_timings(monkeypatch
 
     assert "\x1b[" in colored
     assert "\x1b[1;38;5;166m76.0s\x1b[0m" in colored
-    assert "\x1b[1;38;5;166m41.0s\x1b[0m" in colored
+    # Warm timings are summarized as an average and range rather than listed
+    # individually; the whole cell is highlighted when the max exceeds the limit.
+    assert "\x1b[1;38;5;166mavg 30.5s (20.0-41.0s, n=2)\x1b[0m" in colored
+    assert "avg 30.5s (20.0-41.0s, n=2)" in plain
+    # comparison's single warm trial (20.0s, under the limit) stays a plain value.
+    assert "20.0s" in plain
     assert re.search(r"\x1b\[1;31mFAIL\s*\x1b\[0m", colored)
     assert re.search(r"\x1b\[1;31mnot_viable\s*\x1b\[0m", colored)
     assert re.search(r"\x1b\[1;38;5;166m7\.00 GiB\s*\x1b\[0m", colored)
@@ -1004,3 +1138,113 @@ def test_smoke_run_preserves_partial_artifacts_on_model_failure(monkeypatch, tmp
     responses = list(run_dirs[0].joinpath("responses").glob("*.md"))
     assert len(responses) == 1
     assert "first completed response" in responses[0].read_text()
+
+
+def test_standard_summary_head_to_head_uses_real_model_tags_and_plain_language(tmp_path):
+    from security_response_generator import model_evaluation_stats
+
+    paired = model_evaluation_stats.PairedSummary(
+        wins=2,
+        losses=20,
+        ties=8,
+        win_rate=2 / 30,
+        loss_rate=20 / 30,
+        tie_rate=8 / 30,
+        macro_task_win_rate=0.07,
+        bootstrap_win_rate_ci=(0.0, 0.2),
+        bootstrap_iterations=2000,
+        bootstrap_seed=20260101,
+    )
+    stats = model_evaluation_stats.StandardStats(
+        suite_version="standard-v1",
+        task_stats=[
+            model_evaluation_stats.TaskAssessmentStats(
+                case_id=f"task-{i}",
+                control_id="XX-1",
+                per_model={},
+                task_aggregate={},
+                seed_consistent={},
+                paired_outcomes={},
+            )
+            for i in range(10)
+        ],
+        macro_assessment_rates={"candidate": {}, "comparison": {}},
+        paired=paired,
+        hard_failure_counts={"candidate": {}, "comparison": {}},
+    )
+    result = model_evaluation.EvaluationResult(
+        candidate_model="phi4-mini:latest",
+        comparison_model="gemma4:e4b-it-qat",
+        grader_model="grader:latest",
+        profile="standard",
+        output_dir=tmp_path,
+        trials=[],
+        grades=[],
+    )
+
+    summary = model_evaluation.render_summary(result, stats=stats)
+
+    assert "Head-to-head results" in summary
+    assert "phi4-mini:latest won" in summary
+    assert "2 of 30 (7%)" in summary
+    assert "gemma4:e4b-it-qat won" in summary
+    assert "20 of 30 (67%)" in summary
+    assert "Tied" in summary
+    assert "8 of 30 (27%)" in summary
+    assert "likely land somewhere between 0% and 20%" in summary
+    # No leaked internal role labels or raw/negative-looking CI notation.
+    assert "Bootstrap" not in summary
+    assert "candidate vs. comparison" not in summary
+    assert "[-" not in summary
+    # The hard-failure counts table was dropped; those numbers still live in
+    # results.json/stats.json for anyone who wants them.
+    assert "Hard-failure counts" not in summary
+
+
+def test_standard_summary_human_review_priorities_uses_capped_spot_check_sample(tmp_path):
+    from security_response_generator import model_evaluation_sampling
+
+    manifest = model_evaluation_sampling.SamplingManifest(
+        rule_description="Blinded human-review sample is capped at 5 response pairs...",
+        rng_seed=20260831,
+        selected=[
+            model_evaluation_sampling.SampledPair(
+                case_id="ac2-negative-fact",
+                seed=42,
+                candidate_trial_number=1,
+                comparison_trial_number=1,
+                reasons=["automated_disagreement", "high_risk_finding"],
+            ),
+            model_evaluation_sampling.SampledPair(
+                case_id="si5-context",
+                seed=43,
+                candidate_trial_number=2,
+                comparison_trial_number=2,
+                reasons=["random_spot_check"],
+            ),
+        ],
+        excluded=[(f"task-{i}", 42) for i in range(28)],
+    )
+    result = model_evaluation.EvaluationResult(
+        candidate_model="phi4-mini:latest",
+        comparison_model="gemma4:e4b-it-qat",
+        grader_model="grader:latest",
+        profile="standard",
+        output_dir=tmp_path,
+        trials=[],
+        grades=[],
+    )
+
+    summary = model_evaluation.render_summary(result, sampling_manifest=manifest)
+
+    assert "Human review priorities (spot-check sample)" in summary
+    assert "ac2-negative-fact" in summary
+    assert "Models disagreed" in summary
+    assert "Flagged finding" in summary
+    assert "si5-context" in summary
+    assert "Random spot check" in summary
+    assert "Read these 2 of 30 response pairs" in summary
+    # Internal reason tags must not leak through unhumanized.
+    assert "automated_disagreement" not in summary
+    assert "high_risk_finding" not in summary
+    assert "random_spot_check" not in summary
