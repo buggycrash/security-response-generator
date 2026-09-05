@@ -45,8 +45,9 @@ def test_evaluate_model_smoke_profile_shows_plan_and_defaults_confirmation_to_no
     assert "10 total" in result.output
     assert "20 total (analyst check + assessment per response)" in result.output
     assert "memory/GPU residency" in result.output
+    assert "its overall verdict is recorded but never decides" in result.output
     assert "Missing analyst context or no customer coverage = not viable" in result.output
-    assert "Partial customer or incomplete private coverage = edits" in result.output
+    assert "Any validation heading left in the narrative = not viable" in result.output
     assert "2+ = not viable; 1 = edits" in result.output
     assert "does not score prose quality or writing style" in result.output
     assert "No active engagement data" in result.output

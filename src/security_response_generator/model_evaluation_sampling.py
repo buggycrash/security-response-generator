@@ -31,7 +31,8 @@ RULE_DESCRIPTION = (
     "pairs, since a person will not realistically read more than a handful. Pairs "
     "where the two models' automated assessments disagreed, or where either "
     "response was flagged (not_viable, missing or unverified analyst context, or a "
-    "contradictory grader adjustment), are selected first and spread across as many "
+    "category SRG derived against the reviewer model's verdict), are selected first "
+    "and spread across as many "
     "different tasks as possible. If flagged pairs do not fill the sample, remaining "
     "slots are filled with a deterministic random spot check of the unflagged pairs, "
     "using a locally seeded random-number generator. Every pair not selected is "
@@ -73,7 +74,9 @@ def _is_high_risk(grade: GradeRecord) -> bool:
             return True
         if finding.get("analyst_context_included") in (False, None):
             return True
-        if finding.get("policy_adjustment") or finding.get("completeness_adjustment"):
+        # SRG derives the category, so a divergence from the reviewer model's own
+        # verdict is the signal most worth a human's eyes.
+        if finding.get("reviewer_divergence"):
             return True
     return False
 

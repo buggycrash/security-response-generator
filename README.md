@@ -179,6 +179,9 @@ rather than qualification evidence; see
 [Evaluate a generation model](docs/technical-readme.md#evaluate-a-generation-model)
 for smoke's timing thresholds, quality checks, and output artifacts.
 
+SRG, rather than the reviewer model, assigns each result — from the reviewer's
+structured observations plus checks SRG performs itself.
+
 ## Common next steps
 
 ```bash
