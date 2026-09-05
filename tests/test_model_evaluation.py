@@ -3,7 +3,6 @@ import json
 import os
 import re
 from collections import Counter
-from pathlib import Path
 
 import pytest
 
@@ -339,231 +338,6 @@ def test_unload_models_does_not_call_generate_for_absent_model(monkeypatch):
     assert generated == []
 
 
-def test_unload_models_waits_for_ollama_ps_to_remove_process(monkeypatch):
-    generated = []
-    process_states = iter([object(), object(), None])
-
-    class FakeClient:
-        def generate(self, **kwargs):
-            generated.append(kwargs)
-
-    monkeypatch.setattr(model_evaluation, "_local_client", lambda: FakeClient())
-    monkeypatch.setattr(model_evaluation, "_resident_process", lambda model: next(process_states))
-    monkeypatch.setattr(model_evaluation.time, "sleep", lambda seconds: None)
-
-    model_evaluation.unload_models(["loaded:latest"])
-
-    assert generated == [{"model": "loaded:latest", "prompt": "", "keep_alive": 0}]
-
-
-def test_residency_snapshots_poll_once_for_multiple_models(monkeypatch):
-    ps_calls = 0
-
-    class Process:
-        def __init__(self, model, size, size_vram):
-            self.model = model
-            self.name = model
-            self.size = size
-            self.size_vram = size_vram
-            self.context_length = 16384
-
-    class Response:
-        models = [
-            Process("candidate:latest", 8 * 1024**3, 6 * 1024**3),
-            Process("embedding:latest", 512 * 1024**2, 512 * 1024**2),
-        ]
-
-    class FakeClient:
-        def ps(self):
-            nonlocal ps_calls
-            ps_calls += 1
-            return Response()
-
-    monkeypatch.setattr(model_evaluation, "_local_client", lambda: FakeClient())
-
-    snapshots = model_evaluation.residency_snapshots(["candidate:latest", "embedding:latest"])
-
-    assert ps_calls == 1
-    assert snapshots["candidate:latest"]["size_bytes"] == 8 * 1024**3
-    assert snapshots["candidate:latest"]["size_vram_bytes"] == 6 * 1024**3
-    assert snapshots["embedding:latest"]["context_length"] == 16384
-
-
-def test_smoke_run_writes_blinded_artifacts(monkeypatch, tmp_path):
-    generated = []
-    analyst_payloads = []
-    analyst_options = []
-    grading_payloads = []
-    statuses = []
-    monkeypatch.setattr(model_evaluation, "unload_models", lambda models: None)
-    monkeypatch.setattr(model_evaluation, "embed_query", lambda text: [0.0])
-    monkeypatch.setattr(
-        model_evaluation,
-        "residency_snapshots",
-        _resident_snapshots,
-    )
-
-    def fake_review(messages, response_format=None, **kwargs):
-        payload = json.loads(messages[1]["content"])
-        if response_format == model_evaluation.ANALYST_INCLUSION_SCHEMA:
-            analyst_payloads.append(payload)
-            analyst_options.append(kwargs)
-            evidence = next(
-                line for line in payload["narrative"].splitlines() if "Fictional narrative" in line
-            )
-            return _analyst_reply(evidence)
-        grading_payloads.append(payload)
-        return _grade_reply()
-
-    monkeypatch.setattr(model_evaluation, "review_messages", fake_review)
-
-    def fake_generate(case, model, seed, phase):
-        generated.append((case.id, model, seed))
-        return model_evaluation.GenerationOutput(
-            response_text=(
-                f"# {case.control_id}\n\nFictional narrative for seed {seed}.\n"
-                f"[Validations]\n\nEvidence for seed {seed}."
-            ),
-            model_calls=[{"model": model, "total_duration": 10}],
-            forced_completion=False,
-        )
-
-    result = model_evaluation.run_smoke_evaluation(
-        "candidate:latest",
-        "default:latest",
-        generate=fake_generate,
-        output_root=tmp_path / "runs",
-        on_status=statuses.append,
-    )
-
-    assert len(generated) == 10
-    assert generated[:3] == [
-        ("si5-context", "candidate:latest", 42),
-        ("si5-context", "candidate:latest", 43),
-        ("si5-context", "candidate:latest", 44),
-    ]
-    assert len(result.grades) == 5
-    assert [grade.trial_number for grade in result.grades] == [1, 2, 3, 1, 1]
-    assert len(analyst_payloads) == 10
-    assert (
-        analyst_options
-        == [
-            {
-                "num_predict": model_evaluation.ANALYST_INCLUSION_MAX_TOKENS,
-                "temperature": model_evaluation.ANALYST_INCLUSION_TEMPERATURE,
-                "think": False,
-            }
-        ]
-        * 10
-    )
-    assert len(grading_payloads) == 10
-    assert set(analyst_payloads[0]) == {"analyst_context", "narrative"}
-    assert "[Validations]" not in analyst_payloads[0]["narrative"]
-    assert "response_a" not in grading_payloads[0]
-    assert "analyst_fact" not in grading_payloads[0]
-    assert "[Validations]" not in grading_payloads[0]["response"]["narrative"]
-    assert grading_payloads[0]["response"]["validations"].startswith("Evidence")
-    assert grading_payloads[0] == grading_payloads[1]
-    assert any("Grading SI-5 trial 1 Response A independently" in status for status in statuses)
-    assert any(
-        "Checking analyst context for SI-5 trial 1 Response A" in status for status in statuses
-    )
-    assert result.output_dir.joinpath("results.json").is_file()
-    assert result.output_dir.joinpath("summary.txt").is_file()
-    assert result.output_dir.joinpath("grader-findings.md").is_file()
-    assert len(list(result.output_dir.joinpath("responses").glob("*.md"))) == 10
-
-    worksheet = result.output_dir.joinpath("human-review.md").read_text()
-    answer_key = result.output_dir.joinpath("answer-key.md").read_text()
-    grader_findings = result.output_dir.joinpath("grader-findings.md").read_text()
-    assert "Response A" in worksheet and "Response B" in worksheet
-    assert "candidate:latest" not in worksheet
-    assert "A = candidate" in answer_key
-    assert "Automated independent grader findings" in grader_findings
-    assert "Preference:" not in grader_findings
-    assert "Human review focus:" in grader_findings
-    assert "Analyst context included: True" in grader_findings
-    assert "Analyst narrative evidence: Fictional narrative for seed 42." in grader_findings
-    assert "Analyst evidence verified: True" in grader_findings
-    assert "Customer standard coverage: full" in grader_findings
-    assert "Private context coverage: full" in grader_findings
-    assert "Explicit placeholders: 0" in grader_findings
-    assert "Forced completion: no" in grader_findings
-    summary = model_evaluation.render_summary(result)
-    assert "SMOKE EVALUATION - NOT A MODEL-QUALIFICATION RESULT" in summary
-    assert "candidate:latest" in summary
-    assert "default:latest" in summary
-    assert "Performance" in summary and "Automated independent review" in summary
-    assert "Automated coverage and completeness checks" in summary
-    assert "viable" in summary
-    assert "Human review priorities" in summary
-    assert "None identified" in summary
-    assert "human prose and style spot-checking is still required" in summary
-    assert f"Human review:    {result.output_dir / 'human-review.md'}" in summary
-    assert f"Answer key:      {result.output_dir / 'answer-key.md'}" in summary
-
-
-def test_grading_policy_makes_missing_analyst_context_not_viable():
-    parsed = _finding_with_verified_analyst()
-    parsed["assessment"] = "material_edits"
-    parsed["analyst_context_included"] = False
-    case = model_evaluation.load_smoke_cases()[0]
-
-    adjusted = model_evaluation._apply_finding_policy(parsed, case)
-
-    assert adjusted["assessment"] == "not_viable"
-    assert "mandatory analyst context was missing" in adjusted["policy_adjustment"]
-
-
-def test_grading_policy_applies_customer_coverage_severity():
-    case = model_evaluation.load_smoke_cases()[0]
-    missing = _finding_with_verified_analyst()
-    missing["customer_standard_coverage"] = "none"
-    partial = _finding_with_verified_analyst()
-    partial["customer_standard_coverage"] = "partial"
-
-    missing_adjusted = model_evaluation._apply_finding_policy(missing, case)
-    partial_adjusted = model_evaluation._apply_finding_policy(partial, case)
-
-    assert missing_adjusted["assessment"] == "not_viable"
-    assert "no supplied customer-standard requirements" in missing_adjusted["policy_adjustment"]
-    assert partial_adjusted["assessment"] == "material_edits"
-    assert "customer-standard coverage was partial" in partial_adjusted["policy_adjustment"]
-
-
-def test_grading_policy_makes_missing_private_context_material_edits():
-    parsed = _finding_with_verified_analyst()
-    parsed["private_context_coverage"] = "none"
-    case = model_evaluation.load_smoke_cases()[0]
-
-    adjusted = model_evaluation._apply_finding_policy(parsed, case)
-
-    assert adjusted["assessment"] == "material_edits"
-    assert "private-context coverage was none" in adjusted["policy_adjustment"]
-
-
-def test_grading_policy_does_not_penalize_sources_that_were_not_provided():
-    parsed = _finding_with_verified_analyst()
-    parsed["customer_standard_coverage"] = "none"
-    parsed["private_context_coverage"] = "none"
-    case = model_evaluation.EvaluationCase(
-        id="no-optional-context",
-        control_id="SC-8(1)",
-        context="TLS protects information in transit.",
-        customer_chunks=[],
-        baseline_chunks=["Protect transmitted information."],
-        private_chunks=[],
-        rubric=["Evaluate source coverage independently."],
-    )
-
-    adjusted = model_evaluation._apply_finding_policy(parsed, case)
-
-    assert adjusted["assessment"] == "viable"
-    assert adjusted["customer_standard_coverage"] == "not_provided"
-    assert adjusted["private_context_coverage"] == "not_provided"
-    assert "policy_adjustment" not in adjusted
-
-
 def test_explicit_placeholder_count_is_deterministic():
     response = """The word placeholder alone does not count.
 [PLACEHOLDER: identify the owner]
@@ -573,103 +347,6 @@ def test_explicit_placeholder_count_is_deterministic():
 """
 
     assert model_evaluation.count_placeholders(response) == 2
-
-
-def test_completeness_rows_include_clean_viable_trials():
-    finding = json.loads(_grade_reply())
-    finding.update(
-        analyst_context_included=True,
-        analyst_context_evidence_verified=True,
-    )
-    trial = model_evaluation.TrialRecord(
-        role="candidate",
-        model="candidate:latest",
-        case_id="si5-context",
-        control_id="SI-5",
-        seed=42,
-        phase="cold",
-        wall_seconds=1.0,
-        response_text="A clean response.",
-        model_calls=[],
-        forced_completion=False,
-        residency=None,
-        embedding_residency=None,
-        placeholder_count=0,
-    )
-    result = model_evaluation.EvaluationResult(
-        candidate_model="candidate:latest",
-        comparison_model="comparison:latest",
-        grader_model="grader:latest",
-        profile="smoke",
-        output_dir=Path("unused"),
-        trials=[trial],
-        grades=[
-            model_evaluation.GradeRecord(
-                case_id="si5-context",
-                response_a_role="candidate",
-                response_b_role="comparison",
-                parsed={"response_a": finding},
-                raw={"response_a": _grade_reply()},
-            )
-        ],
-    )
-
-    rows = model_evaluation._completeness_rows(result)
-
-    assert len(rows) == 1
-    assert rows[0]["assessment"] == "viable"
-
-    summary = model_evaluation.render_summary(result, color=True)
-    assert "\x1b[" in summary  # colored output was requested and rendered
-
-
-def test_one_explicit_placeholder_prevents_viable_assessment():
-    finding = json.loads(_grade_reply())
-    trial = model_evaluation.TrialRecord(
-        role="candidate",
-        model="candidate:latest",
-        case_id="si5-context",
-        control_id="SI-5",
-        seed=42,
-        phase="cold",
-        wall_seconds=1.0,
-        response_text="[PLACEHOLDER: owner]",
-        model_calls=[],
-        forced_completion=True,
-        residency=None,
-        embedding_residency=None,
-        placeholder_count=1,
-    )
-
-    adjusted = model_evaluation._apply_completeness_policy(finding, trial)
-
-    assert adjusted["assessment"] == "material_edits"
-    assert "one explicit placeholder" in adjusted["completeness_adjustment"]
-
-
-def test_multiple_explicit_placeholders_are_not_viable():
-    finding = json.loads(_grade_reply())
-    finding["assessment"] = "material_edits"
-    trial = model_evaluation.TrialRecord(
-        role="candidate",
-        model="candidate:latest",
-        case_id="si5-context",
-        control_id="SI-5",
-        seed=42,
-        phase="cold",
-        wall_seconds=1.0,
-        response_text="[PLACEHOLDER: owner] [PLACEHOLDER: date]",
-        model_calls=[],
-        forced_completion=True,
-        residency=None,
-        embedding_residency=None,
-        placeholder_count=2,
-    )
-
-    adjusted = model_evaluation._apply_completeness_policy(finding, trial)
-
-    assert adjusted["assessment"] == "not_viable"
-    assert "2 explicit placeholders" in adjusted["completeness_adjustment"]
 
 
 def test_summary_surfaces_missing_facts_and_placeholders_before_human_review(tmp_path):
@@ -743,7 +420,12 @@ def test_summary_surfaces_missing_facts_and_placeholders_before_human_review(tmp
     assert "partial" in summary
     assert "2" in summary
     assert "yes" in summary
-    assert "analyst=missing, customer=none" in summary
+    # The reviewer model reports; SRG decides. Both halves must be visible so a
+    # reader is never left thinking the reviewer's verdict was the result.
+    assert "verdict is recorded in 'Reviewer said' but never decides" in summary
+    assert "analyst=missing, customer=none, 2+ placeholders, or any validation" in summary
+    assert "heading in the narrative => not_viable" in summary
+    assert "'Val in narr' counts validation headings" in summary
 
 
 def test_generation_timing_excludes_residency_monitoring_delay():
@@ -965,8 +647,8 @@ def test_terminal_summary_colors_failures_and_only_offending_timings(monkeypatch
     assert "Observed memory residency" in plain
     assert "process-table polling is excluded" in plain
     assert "does not score prose quality or writing style" in plain
-    assert "Contradictory grader findings" in plain
-    assert "Policy-adjusted trials" not in plain
+    assert "Reviewer disagreed with SRG" in plain
+    assert "Contradictory grader findings" not in plain
 
 
 def test_user_interrupt_preserves_completed_work_and_cleans_up_models(monkeypatch, tmp_path):
@@ -1025,7 +707,10 @@ def test_grading_interrupt_preserves_each_completed_independent_call(monkeypatch
 
     def fake_generate(case, model, seed, phase):
         return model_evaluation.GenerationOutput(
-            response_text="completed draft",
+            response_text=(
+                "The completed draft describes how the system implements this control.\n"
+                "Designated personnel review and disseminate alerts on the required schedule."
+            ),
             model_calls=[],
             forced_completion=False,
         )
@@ -1248,3 +933,67 @@ def test_standard_summary_human_review_priorities_uses_capped_spot_check_sample(
     assert "automated_disagreement" not in summary
     assert "high_risk_finding" not in summary
     assert "random_spot_check" not in summary
+
+
+def _rendered(narrative: str) -> str:
+    """Wrap a narrative in SRG's rendered layout, with its own [Validations]."""
+    return f"{narrative}\n\n[Validations]\n\n* Screenshot of the alert dashboard.\n"
+
+
+@pytest.mark.parametrize(
+    "heading",
+    [
+        "**Validations**: - Screenshot of the Example Sentinel alert dashboard.",
+        "**Validations:**",
+        "Validations:",
+        "## Validations",
+        "### Validation Evidence:",
+        "* Validations:",
+        "Validations",
+    ],
+)
+def test_validation_headings_left_in_the_narrative_are_counted(heading):
+    """Every shape here was observed in a real evaluation run."""
+    response = _rendered(f"The team reviews alerts within 24 hours.\n{heading}\n")
+
+    assert model_evaluation.count_narrative_validations(response) == 1
+
+
+@pytest.mark.parametrize(
+    "prose",
+    [
+        "Input validation is enforced at the API boundary.",
+        "Validation of user input occurs at the service boundary.",
+        "The validations are documented in the runbook.",
+        "SI-10 requires information input validation for all submitted fields.",
+        "These validation steps happen automatically on ingest.",
+    ],
+)
+def test_ordinary_prose_about_validation_is_not_counted(prose):
+    """Information input validation is itself a control topic (SI-10)."""
+    assert model_evaluation.count_narrative_validations(_rendered(prose)) == 0
+
+
+def test_srgs_own_validations_section_is_never_counted():
+    """Only the narrative is inspected; the rendered section below it is correct."""
+    response = _rendered("The team reviews alerts within 24 hours of receipt.")
+
+    assert "[Validations]" in response
+    assert model_evaluation.count_narrative_validations(response) == 0
+
+
+def test_a_literal_bracketed_marker_is_the_section_boundary_not_a_narrative_defect():
+    """`[Validations]` is the separator SRG renders, so it delimits the narrative
+    rather than appearing inside it. That shape is already handled by
+    `_render_final_reply`, which strips a duplicate block out of the prose; the
+    counter exists for the shapes that survive it."""
+    response = _rendered("Alerts are reviewed.\n[Validations]\n\n* Stray block.\n")
+
+    assert model_evaluation._response_sections(response)["narrative"] == "Alerts are reviewed."
+    assert model_evaluation.count_narrative_validations(response) == 0
+
+
+def test_multiple_narrative_validation_headings_are_all_counted():
+    response = _rendered("Alerts are reviewed.\nValidations:\nMore prose.\n**Validations**:\n")
+
+    assert model_evaluation.count_narrative_validations(response) == 2

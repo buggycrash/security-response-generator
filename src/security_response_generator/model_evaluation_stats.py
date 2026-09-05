@@ -26,7 +26,12 @@ STANDARD_BOOTSTRAP_SEED = 20260101
 STANDARD_BOOTSTRAP_ITERATIONS = 2000
 
 ASSESSMENTS = ("viable", "material_edits", "not_viable", "inconclusive")
-HARD_FAILURE_REASONS = ("analyst_missing", "customer_none", "repeated_placeholder")
+HARD_FAILURE_REASONS = (
+    "analyst_missing",
+    "customer_none",
+    "repeated_placeholder",
+    "narrative_validations",
+)
 _ROLES = ("candidate", "comparison")
 
 
@@ -42,8 +47,10 @@ class ModelAssessmentStats:
     private_none_or_partial_rate: float
     placeholder_rate: float
     repeated_placeholder_rate: float
+    narrative_validations_rate: float
     forced_completion_rate: float
     scope_material_drift_rate: float
+    reviewer_divergence_rate: float
 
 
 @dataclass
@@ -152,11 +159,19 @@ def _model_assessment_stats(
     repeated_placeholder = sum(
         1 for trial in matched_trials if trial is not None and trial.placeholder_count >= 2
     )
+    narrative_validations = sum(
+        1 for trial in matched_trials if trial is not None and trial.narrative_validations
+    )
     forced_completion = sum(
         1 for trial in matched_trials if trial is not None and trial.forced_completion
     )
     scope_material_drift = sum(
         1 for finding in findings if finding and finding.get("scope") == "material_drift"
+    )
+    # How often SRG's derived category differed from the reviewer model's own
+    # verdict. This is the calibration evidence for deriving it at all.
+    reviewer_divergence = sum(
+        1 for finding in findings if finding and finding.get("reviewer_divergence")
     )
 
     return ModelAssessmentStats(
@@ -170,8 +185,10 @@ def _model_assessment_stats(
         private_none_or_partial_rate=_rate(private_none_or_partial, total),
         placeholder_rate=_rate(placeholder_present, total),
         repeated_placeholder_rate=_rate(repeated_placeholder, total),
+        narrative_validations_rate=_rate(narrative_validations, total),
         forced_completion_rate=_rate(forced_completion, total),
         scope_material_drift_rate=_rate(scope_material_drift, total),
+        reviewer_divergence_rate=_rate(reviewer_divergence, total),
     )
 
 
@@ -245,6 +262,8 @@ def compute_standard_stats(
                     hard_failure_counts[role]["customer_none"] += 1
                 if trial is not None and trial.placeholder_count >= 2:
                     hard_failure_counts[role]["repeated_placeholder"] += 1
+                if trial is not None and trial.narrative_validations:
+                    hard_failure_counts[role]["narrative_validations"] += 1
 
         task_win_rate = _rate(
             sum(1 for outcome in paired_outcomes.values() if outcome == "win"),

@@ -55,7 +55,7 @@ def test_dev_only_installs_checks_without_touching_launcher_or_ollama(tmp_path):
         '  chmod +x "$3/bin/python"\n'
         "  exit 0\n"
         "fi\n"
-        'if [ "${1:-}" = "-m" ] && [ "${2:-}" = "pip" ]; then\n'
+        'if [ "${1:-}" = "-m" ]; then\n'
         '  printf \'%s\\n\' "$*" >> "$SRG_TEST_PYTHON_LOG"\n'
         "fi\n"
         "exit 0\n",

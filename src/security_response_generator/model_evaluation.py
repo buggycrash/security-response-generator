@@ -43,6 +43,26 @@ _RUN_DIRECTORY_RE = re.compile(r"^\d{8}_\d{6}_.+")
 _RUN_MARKER = ".srg-evaluation-run"
 _PLACEHOLDER_RE = re.compile(r"\[\s*PLACEHOLDER(?:\s*:[^\]]*)?\s*\]", re.IGNORECASE)
 
+# A validation heading left in the narrative, in any of the shapes models
+# actually emit: "[Validations]", "## Validations", "Validations:",
+# "**Validations**:", "**Validations:**", "### Validation Evidence:".
+# The label must open the line and be followed by a colon or nothing else, so
+# ordinary prose ("input validation is enforced", "validation of user input
+# occurs at the boundary") never matches.
+_NARRATIVE_VALIDATIONS_RE = re.compile(
+    r"^[^\S\n]*"
+    r"(?:[-*+][^\S\n]+)?"  # list bullet
+    r"(?:#{1,6}[^\S\n]*)?"  # Markdown heading
+    r"(?:\*\*|__)?"  # bold open
+    r"\[?[^\S\n]*"  # bracket open
+    r"validations?"
+    r"(?:[^\S\n]+(?:evidence|suggestions?))?"
+    r"[^\S\n]*\]?"  # bracket close
+    r"(?:\*\*|__)?"  # bold close
+    r"[^\S\n]*(?::|$)",  # colon, or nothing else on the line
+    re.IGNORECASE | re.MULTILINE,
+)
+
 ANALYST_INCLUSION_SCHEMA = {
     "type": "object",
     "properties": {
@@ -210,6 +230,7 @@ class TrialRecord:
     monitoring_seconds: float = 0.0
     residency_poll_seconds: float = 0.0
     placeholder_count: int = 0
+    narrative_validations: int = 0
 
 
 @dataclass
@@ -622,88 +643,141 @@ def count_placeholders(response: str) -> int:
     return len(_PLACEHOLDER_RE.findall(response))
 
 
-def _apply_finding_policy(
-    finding: dict[str, Any] | None, case: EvaluationCase
+def count_narrative_validations(response: str) -> int:
+    """Count validation headings left inside the implementation narrative.
+
+    SRG renders validations as its own ``[Validations]`` section built from the
+    model's structured field, and `_render_final_reply` already strips a
+    duplicate trailing ``[Validations]`` block out of the prose. Some models
+    still emit a validation list mid-narrative in other shapes
+    (``**Validations**:``, ``Validations:``), which survives that cleanup.
+
+    That is a generation-guidance violation with a concrete cost: the analyst
+    reads the narrative first and often pastes it into a system of record, so
+    embedded evidence suggestions confuse them and the assessor downstream. It
+    also demonstrably confuses the reviewer model, which counts the validation
+    text as narrative coverage of a requirement the prose never stated.
+
+    Only heading-like occurrences count. Bare prose uses of the word are
+    ignored, because "information input validation" is itself a control topic
+    (SI-10) and must not be mistaken for a stray section.
+    """
+    return len(_NARRATIVE_VALIDATIONS_RE.findall(_response_sections(response)["narrative"]))
+
+
+def derive_assessment(
+    finding: dict[str, Any] | None,
+    case: EvaluationCase,
+    trial: TrialRecord,
 ) -> dict[str, Any] | None:
-    """Apply deterministic severity rules to independent source-coverage findings."""
+    """Assign the final category in code, from observations rather than a verdict.
+
+    The reviewer model's own ``assessment`` is recorded as
+    ``reviewer_assessment`` and then plays no part in the outcome. It was
+    reporting ``not_viable`` on drafts a human would call ``material_edits``,
+    and because the old policies only ever escalated, nothing downstream could
+    walk that back. The category is derived instead from the reviewer's
+    *structured* observations (coverage labels and scope) and the checks SRG
+    owns outright: the verified analyst precheck, the exact placeholder count,
+    and validation headings left in the narrative.
+    """
     if not isinstance(finding, dict):
         return finding
 
-    customer_coverage = finding.get("customer_standard_coverage")
+    reviewer_assessment = finding.get("assessment")
+    finding["reviewer_assessment"] = reviewer_assessment
+    trace: list[str] = []
+
+    # Empty inputs carry no coverage obligation.
+    reviewer_customer = finding.get("customer_standard_coverage")
+    reviewer_private = finding.get("private_context_coverage")
     if case.customer_chunks:
-        if customer_coverage == "not_provided":
-            customer_coverage = "none"
+        reviewer_customer = "none" if reviewer_customer == "not_provided" else reviewer_customer
     else:
-        customer_coverage = "not_provided"
-    finding["customer_standard_coverage"] = customer_coverage
-
-    private_coverage = finding.get("private_context_coverage")
+        reviewer_customer = "not_provided"
     if case.private_chunks:
-        if private_coverage == "not_provided":
-            private_coverage = "none"
+        reviewer_private = "none" if reviewer_private == "not_provided" else reviewer_private
     else:
-        private_coverage = "not_provided"
-    finding["private_context_coverage"] = private_coverage
+        reviewer_private = "not_provided"
+    finding["customer_standard_coverage"] = reviewer_customer
+    finding["private_context_coverage"] = reviewer_private
 
-    assessment = finding.get("assessment")
     hard_failures = []
     if finding.get("analyst_context_included") is False:
-        hard_failures.append("mandatory analyst context was missing from the narrative")
-    if customer_coverage == "none":
+        hard_failures.append("the analyst precheck found the analyst context missing")
+    if case.customer_chunks and reviewer_customer == "none":
         hard_failures.append("no supplied customer-standard requirements were reflected")
+    if trial.placeholder_count >= 2:
+        hard_failures.append(
+            f"the response contains {trial.placeholder_count} explicit placeholders"
+        )
+    # The analyst reads the narrative first and often pastes it into a system of
+    # record, so evidence suggestions embedded in it mislead both them and the
+    # assessor. It also inflates the reviewer's coverage judgment.
+    if trial.narrative_validations:
+        hard_failures.append(
+            f"the implementation narrative contains {trial.narrative_validations} "
+            "validation heading(s) instead of keeping them in the [Validations] section"
+        )
     if hard_failures:
-        if assessment != "not_viable":
-            finding["assessment"] = "not_viable"
-            finding["policy_adjustment"] = (
-                f"Changed {assessment} to not_viable because " + "; ".join(hard_failures) + "."
-            )
-        return finding
-
-    if finding.get("analyst_context_included") is None and assessment == "viable":
-        finding["assessment"] = "inconclusive"
-        finding["policy_adjustment"] = (
-            "Changed viable to inconclusive because analyst-context inclusion could not "
-            "be verified from a narrative evidence quote."
-        )
-        assessment = "inconclusive"
-
-    material_edit_reasons = []
-    if customer_coverage == "partial":
-        material_edit_reasons.append("customer-standard coverage was partial")
-    if private_coverage in {"none", "partial"}:
-        material_edit_reasons.append(f"private-context coverage was {private_coverage}")
-    if finding.get("scope") == "material_drift":
-        material_edit_reasons.append("material scope drift was reported")
-    if assessment in {"viable", "inconclusive"} and material_edit_reasons:
-        finding["assessment"] = "material_edits"
-        finding["policy_adjustment"] = (
-            f"Changed {assessment} to material_edits because "
-            + "; ".join(material_edit_reasons)
-            + "."
-        )
-    return finding
-
-
-def _apply_completeness_policy(
-    finding: dict[str, Any] | None, trial: TrialRecord
-) -> dict[str, Any] | None:
-    """Apply deterministic placeholder thresholds to one generation finding."""
-    if not isinstance(finding, dict):
-        return finding
-    assessment = finding.get("assessment")
-    if trial.placeholder_count >= 2 and assessment != "not_viable":
         finding["assessment"] = "not_viable"
-        finding["completeness_adjustment"] = (
-            f"Changed {assessment} to not_viable because the response contains "
-            f"{trial.placeholder_count} explicit placeholders."
+        trace.append("Assigned not_viable because " + "; ".join(hard_failures) + ".")
+        finding["decision_trace"] = trace
+        _note_reviewer_divergence(finding, reviewer_assessment, trace)
+        return finding
+
+    if finding.get("analyst_context_included") is None:
+        finding["assessment"] = "inconclusive"
+        trace.append(
+            "Assigned inconclusive because analyst-context inclusion could not be "
+            "verified from a narrative evidence quote."
         )
-    elif trial.placeholder_count == 1 and assessment == "viable":
+        finding["decision_trace"] = trace
+        _note_reviewer_divergence(finding, reviewer_assessment, trace)
+        return finding
+
+    edit_reasons = []
+    if reviewer_customer == "partial":
+        edit_reasons.append("customer-standard coverage was partial")
+    if reviewer_private in {"none", "partial"}:
+        edit_reasons.append(f"private-context coverage was {reviewer_private}")
+    if finding.get("scope") == "material_drift":
+        edit_reasons.append("the reviewer model reported material scope drift")
+    if trial.placeholder_count == 1:
+        edit_reasons.append("the response contains one explicit placeholder")
+
+    if edit_reasons:
         finding["assessment"] = "material_edits"
-        finding["completeness_adjustment"] = (
-            "Changed viable to material_edits because the response contains one "
-            "explicit placeholder."
+        trace.append("Assigned material_edits because " + "; ".join(edit_reasons) + ".")
+    else:
+        finding["assessment"] = "viable"
+        trace.append(
+            "Assigned viable: analyst context verified in the narrative, supplied sources "
+            "reported as covered, no placeholders, and no validations in the narrative."
         )
+    _note_reviewer_divergence(finding, reviewer_assessment, trace)
+    finding["decision_trace"] = trace
     return finding
+
+
+def _note_reviewer_divergence(
+    finding: dict[str, Any], reviewer_assessment: Any, trace: list[str]
+) -> None:
+    """Record where the reviewer model's verdict differed from the derived one.
+
+    Kept explicit rather than implied: these pairs are the calibration evidence
+    for whether deriving the category is actually an improvement.
+    """
+    if not reviewer_assessment or reviewer_assessment == finding.get("assessment"):
+        return
+    finding["reviewer_divergence"] = (
+        f"reviewer model reported {reviewer_assessment}; SRG assigned {finding['assessment']}"
+    )
+    trace.append(
+        f"The reviewer model alone had reported {reviewer_assessment}; SRG assigns the "
+        "category from its structured observations instead."
+    )
+    finding["decision_trace"] = trace
 
 
 def _net_generation_seconds(elapsed_seconds: float, monitoring_seconds: float) -> float:
@@ -840,6 +914,7 @@ def _run_evaluation(
                         monitoring_seconds=output.monitoring_seconds,
                         residency_poll_seconds=residency_poll_seconds,
                         placeholder_count=count_placeholders(output.response_text),
+                        narrative_validations=count_narrative_validations(output.response_text),
                     )
                 )
                 incomplete_operation = None
@@ -929,8 +1004,8 @@ def _run_evaluation(
                 finding = _parse_grade(raw)
                 if isinstance(finding, dict):
                     finding.update(analyst_check)
-                finding = _apply_finding_policy(finding, case)
-                parsed_findings[label] = _apply_completeness_policy(finding, trial_records[role])
+
+                parsed_findings[label] = derive_assessment(finding, case, trial_records[role])
             incomplete_operation = None
     except KeyboardInterrupt as exc:
         if on_status:
@@ -1195,11 +1270,26 @@ def _assessment_counts(assessments: list[str]) -> str:
 
 
 def _preference_rank(assessments: list[str]) -> tuple[int, int, int, int]:
-    """Rank a model's trial distribution, with viable count always dominant."""
+    """Rank a model's trial distribution, fewest unusable drafts first.
+
+    ``not_viable`` is dominant rather than ``viable``. An earlier version led
+    with the viable count, which meant a single good trial outranked any number
+    of unusable ones: a model that failed two of three trials outright was
+    reported as preferred over one that merely needed edits on all three. For
+    this workload an unusable draft is the outcome worth avoiding, since an
+    analyst can edit a flawed draft but cannot use one that omits their context
+    or the customer standard.
+
+    ``inconclusive`` stays below ``material_edits``, so a measurement failure
+    never outranks a real result. The induced order on a single trial is
+    therefore unchanged (viable > material_edits > inconclusive > not_viable),
+    which keeps ``paired_outcome`` and the head-to-head statistics comparable
+    with earlier runs.
+    """
     counts = Counter(assessments)
     return (
-        counts["viable"],
         -counts["not_viable"],
+        counts["viable"],
         -counts["inconclusive"],
         -counts["material_edits"],
     )
@@ -1253,7 +1343,7 @@ def _review_priorities(
         case_grades = [grade for grade in result.grades if grade.case_id == summary["case_id"]]
         for role in ("candidate", "comparison"):
             grouped_trials: dict[str, list[str]] = {}
-            adjusted_trials = []
+            disagreement_trials = []
             for grade in case_grades:
                 assessment = _role_assessment(grade, role)
                 if assessment != "viable":
@@ -1261,19 +1351,22 @@ def _review_priorities(
                 if grade.parsed is not None:
                     label = "response_a" if grade.response_a_role == role else "response_b"
                     finding = grade.parsed.get(label, {})
-                    if isinstance(finding, dict) and finding.get("policy_adjustment"):
-                        adjusted_trials.append(str(grade.trial_number))
+                    # Trials where the reviewer model's verdict differed from
+                    # the derived category are the most informative ones to read
+                    # by hand, and are the calibration evidence for this policy.
+                    if isinstance(finding, dict) and finding.get("reviewer_divergence"):
+                        disagreement_trials.append(str(grade.trial_number))
             review_trials = [
                 f"{', '.join(trial_numbers)} ({assessment})"
                 for assessment, trial_numbers in grouped_trials.items()
             ]
-            if review_trials or adjusted_trials:
+            if review_trials or disagreement_trials:
                 priorities.append(
                     {
                         "case_id": summary["case_id"],
                         "model": model_for_role[role],
                         "review_trials": "; ".join(review_trials) or "-",
-                        "policy_adjustments": ", ".join(adjusted_trials) or "-",
+                        "reviewer_divergences": ", ".join(disagreement_trials) or "-",
                     }
                 )
     return priorities
@@ -1313,8 +1406,10 @@ def _completeness_rows(result: EvaluationResult) -> list[dict[str, Any]]:
                     "customer_coverage": customer_coverage,
                     "private_coverage": private_coverage,
                     "placeholder_count": trial.placeholder_count,
+                    "narrative_validations": trial.narrative_validations,
                     "forced_completion": trial.forced_completion,
                     "assessment": finding.get("assessment", "inconclusive"),
+                    "reviewer_assessment": finding.get("reviewer_assessment"),
                 }
             )
     return rows
@@ -1334,7 +1429,11 @@ def render_summary(
     buffer = StringIO()
     report_console = Console(
         file=buffer,
-        width=150,
+        # The smoke coverage table carries eleven columns, two of them full
+        # assessment labels. At 150 Rich truncates them to "material_edi…",
+        # which defeats the point of showing the reviewer's verdict beside the
+        # derived one. 160 is the narrowest width that renders them in full.
+        width=160,
         force_terminal=color,
         color_system="256" if color else None,
         highlight=False,
@@ -1490,6 +1589,26 @@ def render_summary(
             report_console.print(
                 "Macro rates give every task equal weight, regardless of trial count."
             )
+            report_console.print(
+                "SRG assigns each result from the reviewer's structured observations and its "
+                "own checks; the reviewer model's overall verdict is recorded but never decides."
+            )
+            # Macro-averaged like the table above, so one task cannot dominate.
+            for role, model in (
+                ("candidate", result.candidate_model),
+                ("comparison", result.comparison_model),
+            ):
+                rates = [
+                    task.per_model[role].reviewer_divergence_rate
+                    for task in stats.task_stats
+                    if role in task.per_model
+                ]
+                if not rates:
+                    continue
+                report_console.print(
+                    f"  {model}: SRG's category differed from the reviewer's verdict on "
+                    f"{_format_rate(sum(rates) / len(rates))} of trials."
+                )
             report_console.print()
 
             paired = stats.paired
@@ -1538,8 +1657,10 @@ def render_summary(
         completeness_table.add_column("Analyst")
         completeness_table.add_column("Customer")
         completeness_table.add_column("Private")
+        completeness_table.add_column("Val in narr")
         completeness_table.add_column("Placeholders")
         completeness_table.add_column("Forced call")
+        completeness_table.add_column("Reviewer said")
         completeness_table.add_column("Result")
         if completeness_rows:
             previous_case = None
@@ -1592,8 +1713,16 @@ def render_summary(
                             else None
                         ),
                     ),
+                    Text(
+                        str(row["narrative_validations"]),
+                        style="bold red" if color and row["narrative_validations"] else None,
+                    ),
                     Text(str(row["placeholder_count"]), style=placeholder_style),
                     "yes" if row["forced_completion"] else "no",
+                    # Shown so an over-harsh reviewer verdict stays visible next
+                    # to the category SRG actually assigned; this pairing is the
+                    # calibration data for the corroboration thresholds.
+                    row["reviewer_assessment"] or "-",
                     Text(
                         row["assessment"],
                         style=(
@@ -1615,17 +1744,29 @@ def render_summary(
                 "full/n/a",
                 "full/n/a",
                 "0",
+                "0",
                 "no",
+                "-",
                 "clear",
             )
         report_console.print(completeness_table)
         report_console.print(
-            "Policy: analyst=missing, customer=none, or 2+ placeholders => not_viable."
+            "SRG assigns the result below from these observations; the reviewer model's own "
+            "verdict is recorded in 'Reviewer said' but never decides."
         )
         report_console.print(
-            "        customer=partial, private=none/partial, or one placeholder => material_edits."
+            "Policy: analyst=missing, customer=none, 2+ placeholders, or any validation "
+            "heading in the narrative => not_viable."
         )
-        report_console.print("        analyst=unverified prevents a viable result.")
+        report_console.print(
+            "        customer=partial, private=none/partial, material drift, or one "
+            "placeholder => material_edits."
+        )
+        report_console.print("        analyst=unverified => inconclusive.")
+        report_console.print(
+            "'Val in narr' counts validation headings left in the implementation narrative, "
+            "which the analyst reads and pastes first."
+        )
         report_console.print()
 
     report_console.print(
@@ -1661,7 +1802,7 @@ def render_summary(
         priority_table.add_column("Case")
         priority_table.add_column("Model")
         priority_table.add_column("Review trials")
-        priority_table.add_column("Contradictory grader findings")
+        priority_table.add_column("Reviewer disagreed with SRG")
         if review_priorities:
             previous_case = None
             for priority in review_priorities:
@@ -1669,12 +1810,12 @@ def render_summary(
                     priority["case_id"] if priority["case_id"] != previous_case else "",
                     priority["model"],
                     priority["review_trials"],
-                    priority["policy_adjustments"],
+                    priority["reviewer_divergences"],
                 )
                 previous_case = priority["case_id"]
             review_instruction = (
-                "Start with review-priority trials; a contradictory grader finding means a "
-                "critical finding overrode its assessment label."
+                "Start with review-priority trials; a reviewer disagreement means SRG's "
+                "derived category differed from the reviewer model's own verdict."
             )
         elif result.status == "completed" and result.grades:
             priority_table.add_row("All cases", "All models", "None identified", "None identified")
@@ -1879,21 +2020,29 @@ def write_artifacts(
                         (
                             f"Explicit placeholders: {trial.placeholder_count}",
                             "",
+                            "Validation headings left in the narrative: "
+                            f"{trial.narrative_validations}",
+                            "",
                             f"Forced completion: {'yes' if trial.forced_completion else 'no'}",
                             "",
                         )
                     )
-                if finding.get("policy_adjustment"):
-                    grader_findings.extend(
-                        (f"Policy adjustment: {finding['policy_adjustment']}", "")
-                    )
-                if finding.get("completeness_adjustment"):
+                if finding.get("reviewer_assessment") is not None:
                     grader_findings.extend(
                         (
-                            f"Completeness adjustment: {finding['completeness_adjustment']}",
+                            "Reviewer model's own verdict (recorded, not used): "
+                            f"{finding['reviewer_assessment']}",
                             "",
                         )
                     )
+                if finding.get("reviewer_divergence"):
+                    grader_findings.extend(
+                        (f"Reviewer divergence: {finding['reviewer_divergence']}", "")
+                    )
+                if finding.get("decision_trace"):
+                    grader_findings.append("How SRG assigned this category:")
+                    grader_findings.extend(f"- {item}" for item in finding["decision_trace"])
+                    grader_findings.append("")
                 grader_findings.append("Strengths:")
                 grader_findings.extend(
                     f"- {item}" for item in finding.get("strengths", []) or ["None reported."]

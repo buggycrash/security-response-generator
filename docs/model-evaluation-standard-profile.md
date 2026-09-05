@@ -209,12 +209,27 @@ Retain the current policy for every trial:
 - missing or partial relevant private-context coverage requires
   `material_edits` but cannot alone make a response `not_viable`;
 - one explicit placeholder prevents `viable`, and two or more are
-  `not_viable`; and
+  `not_viable`;
+- any validation heading left in the implementation narrative is `not_viable`,
+  since the analyst reads and reuses that prose directly; and
 - material wrong-control scope drift prevents `viable`.
 
 Continue reporting raw grader output, policy adjustments, analyst evidence
 quotes and verification, placeholder counts, forced-completion calls, and
 contradictory grader findings.
+
+> **Implementation note:** the categorization above is now *derived by SRG*
+> rather than escalated from the reviewer model's own verdict. The reviewer
+> returns structured observations (coverage labels, scope) and an overall
+> `assessment`; SRG records the latter as `reviewer_assessment` and ignores it
+> when assigning the result. The previous policy started from that verdict and
+> only ever escalated, so an over-harsh `not_viable` could never be walked back
+> even when every structured observation in the same reply was clean. Any
+> difference between the two is recorded as `reviewer_divergence`, counted in
+> `stats.json`, and prioritized for human review — that pairing is the
+> calibration evidence for the change. Trialled and removed alongside it: an
+> NLI-based second reviewer, see
+> [the NLI reviewer negative result](model-evaluation-nli-findings.md).
 
 ### Statistical aggregation
 
@@ -224,10 +239,12 @@ underlying per-trial findings:
 - counts and rates of `viable`, `material_edits`, `not_viable`, and
   `inconclusive` per model and per task;
 - analyst-missing, analyst-unverified, customer-none, customer-partial,
-  private-none/partial, placeholder, forced-completion, and scope-drift rates;
+  private-none/partial, placeholder, forced-completion, scope-drift, and
+  reviewer-divergence rates;
 - seed consistency for each task and model;
 - paired candidate-versus-comparison results for each identical task and seed;
-- paired win, loss, and tie counts using the assessment severity ordering;
+- paired win, loss, and tie counts using the assessment severity ordering
+  (viable > material_edits > inconclusive > not_viable);
 - macro averages that give each task equal weight, so three easy tasks cannot
   hide one systematically failed task; and
 - confidence intervals or bootstrap intervals for overall paired differences,
@@ -258,7 +275,7 @@ to remain practical.
 The review set prioritizes, in order, until the cap is reached:
 
 1. every candidate/comparison pair where their automated assessments differ;
-2. every `not_viable`, analyst-unverified, contradictory, or otherwise
+2. every `not_viable`, analyst-unverified, reviewer-divergent, or otherwise
    high-priority finding;
 3. spreading selections across as many distinct tasks as possible; and
 4. a deterministic random sample to fill any remaining slots.

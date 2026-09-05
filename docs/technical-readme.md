@@ -569,7 +569,15 @@ here:
   even when paraphrased or insufficient to satisfy other requirements. It is
   missing only when that substance is absent from the narrative; validations and
   generic control language cannot substitute for it. The NIST baseline informs
-  overall requirement coverage but not these source classifications. SRG then
+  overall requirement coverage but not these source classifications.
+  The reviewer model's own overall `assessment` is **recorded but never
+  used**, on both profiles: SRG assigns the category itself from the reviewer's
+  structured observations and the checks SRG owns outright, keeping the
+  reviewer's verdict as `reviewer_assessment` and flagging any
+  `reviewer_divergence` for human review. This replaced an earlier policy that
+  started from the reviewer's verdict and only ever escalated it, which made an
+  over-harsh `not_viable` impossible to walk back even when every structured
+  observation in the same reply was clean. SRG then
   applies the severity rules deterministically: missing analyst context is
   `not_viable`; when customer chunks exist, no customer-standard coverage is
   `not_viable` and partial coverage requires `material_edits`; missing or partial
@@ -592,11 +600,30 @@ here:
   and forced completions before the human-review priorities, while
   `grader-findings.md` retains the same per-trial evidence and any deterministic
   adjustment.
+- SRG also counts validation headings left inside the implementation
+  narrative. Validations belong only in the rendered `[Validations]` section,
+  and any heading-like occurrence in the prose (`**Validations**:`,
+  `Validations:`, `## Validations`) makes the response `not_viable` in both
+  profiles. This is a structural defect rather than a judgment call: the
+  analyst reads the narrative first and frequently pastes it straight into a
+  system of record, so embedded evidence suggestions mislead them and the
+  assessor later. It also measurably distorts automated grading — the reviewer
+  model counts that validation text as narrative coverage of a requirement the
+  prose never actually stated. Ordinary prose about validation is not counted,
+  since information input validation is itself a control topic (SI-10). SRG's
+  renderer already strips a duplicate trailing `[Validations]` block out of the
+  prose; this check catches the shapes that survive that cleanup.
 - SRG aggregates the independent trial findings by case for the terminal
   summary. A case is `viable` only when every trial is viable; any
   `not_viable` or `material_edits` finding carries into the case result.
-  Automated model preference first favors the model with more viable trials,
-  then fewer `not_viable`, `inconclusive`, and `material_edits` trials. Equal
+  Automated model preference first favors the model with **fewer `not_viable`
+  trials**, then more `viable`, then fewer `inconclusive` and `material_edits`
+  trials. An unusable draft is the outcome worth avoiding for this workload:
+  an analyst can edit a flawed draft, but cannot use one that omits their
+  context or the customer standard. (An earlier version led with the viable
+  count, which let a single good trial outrank any number of unusable ones —
+  a model that failed two of three trials was reported as preferred over one
+  that merely needed edits on all three.) Equal
   distributions produce a tie; the grader is never asked for a relative model
   preference. The summary calls out model and trial combinations that need
   human attention, while `grader-findings.md` retains every individual trial
