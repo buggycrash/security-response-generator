@@ -506,3 +506,99 @@ def test_review_messages_rejects_cloud_model_before_creating_client(monkeypatch)
 
     with pytest.raises(ValueError, match="refuses Ollama cloud model"):
         ollama_client.review_messages([{"role": "user", "content": "private"}])
+
+
+def test_review_messages_accepts_a_model_and_seed_override(monkeypatch):
+    """Reviewer evaluation compares two reviewers in one process.
+
+    Mirrors the rationale on generate_messages: no global configuration or
+    caller environment is mutated to switch models.
+    """
+    captured = {}
+
+    def fake_chat(model, messages, options, format, keep_alive):
+        captured.update(model=model, options=options)
+        return {"message": {"content": '{"critique":"revise"}'}}
+
+    monkeypatch.setattr(ollama_client._local_client(), "chat", fake_chat, raising=False)
+
+    ollama_client.review_messages(
+        [{"role": "user", "content": "review this"}],
+        model="candidate-reviewer:latest",
+        seed=99,
+    )
+
+    assert captured["model"] == "candidate-reviewer:latest"
+    assert captured["options"]["seed"] == 99
+
+
+def test_review_messages_still_defaults_to_the_configured_reviewer(monkeypatch):
+    captured = {}
+
+    def fake_chat(model, messages, options, format, keep_alive):
+        captured.update(model=model, options=options)
+        return {"message": {"content": "{}"}}
+
+    monkeypatch.setattr(ollama_client._local_client(), "chat", fake_chat, raising=False)
+    ollama_client.review_messages([{"role": "user", "content": "review"}])
+
+    assert captured["model"] == ollama_client.REVIEW_MODEL
+    assert captured["options"]["seed"] == ollama_client.GENERATION_SEED
+
+
+def test_review_messages_rejects_a_cloud_model_passed_as_an_override(monkeypatch):
+    """The override must not become a way around the cloud-model boundary."""
+    monkeypatch.setattr(
+        ollama_client,
+        "_local_client",
+        lambda: (_ for _ in ()).throw(AssertionError("client must not be created")),
+    )
+
+    with pytest.raises(ValueError, match="refuses Ollama cloud model"):
+        ollama_client.review_messages(
+            [{"role": "user", "content": "private"}], model="reviewer:cloud"
+        )
+
+
+def test_load_model_makes_a_model_resident_without_generating(monkeypatch):
+    captured = {}
+
+    def fake_generate(model, prompt, options, keep_alive):
+        captured.update(model=model, prompt=prompt, keep_alive=keep_alive)
+        return {}
+
+    monkeypatch.setattr(ollama_client._local_client(), "generate", fake_generate, raising=False)
+    ollama_client.load_model("generator:latest")
+
+    assert captured["model"] == "generator:latest"
+    assert captured["prompt"] == ""
+    assert captured["keep_alive"] == ollama_client.GENERATION_KEEP_ALIVE
+
+
+def test_load_model_rejects_a_cloud_model(monkeypatch):
+    monkeypatch.setattr(
+        ollama_client,
+        "_local_client",
+        lambda: (_ for _ in ()).throw(AssertionError("client must not be created")),
+    )
+
+    with pytest.raises(ValueError, match="refuses Ollama cloud model"):
+        ollama_client.load_model("generator:cloud")
+
+
+def test_load_model_reserves_the_production_context_size(monkeypatch):
+    """A model loaded at its own default context reserves far less VRAM.
+
+    Reviewer evaluation reports coexistence memory, so the load has to
+    allocate what a real generation call would.
+    """
+    captured = {}
+
+    def fake_generate(model, prompt, options, keep_alive):
+        captured.update(model=model, options=options)
+        return {}
+
+    monkeypatch.setattr(ollama_client._local_client(), "generate", fake_generate, raising=False)
+    ollama_client.load_model("generator:latest")
+
+    assert captured["options"]["num_ctx"] == ollama_client.NUM_CTX

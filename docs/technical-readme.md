@@ -65,6 +65,11 @@ generation model connects the two even when the wording differs.
   non-ASCII characters.
 - A separate validation section with suggested screenshots that an assessor
   could request to substantiate material claims in the draft.
+- Repeatable model comparison for both roles SRG uses a model in:
+  [`srg evaluate-model`](#evaluate-a-generation-model) for generation and
+  [`srg evaluate-reviewer`](#evaluate-a-reviewer-model) for the
+  review/revision critique. Both run on committed fictional inputs and never
+  touch engagement data.
 
 ## Caveats
 
@@ -460,7 +465,10 @@ Local open-weight model quality is a fast-moving target — new and improved
 releases show up often enough that today's defaults shouldn't be treated as
 permanent. It's worth periodically re-testing both the generation and
 reviewer model choices against your own prompts and hardware as new models
-become available.
+become available. `srg evaluate-model` covers the generation side and
+[`srg evaluate-reviewer`](#evaluate-a-reviewer-model) covers the reviewer
+side; a model that generates well does not necessarily critique well, since
+the two roles reward opposite things.
 
 ## Evaluate a generation model
 
@@ -739,6 +747,107 @@ and 44) per generation model:
   cover slower hardware and larger candidate models without a separate
   hardware caveat.
 
+## Evaluate a reviewer model
+
+`srg evaluate-reviewer` measures how well an installed model performs the
+**review/revision critique** role — the one used by `srg generate --review`
+and `bulk-generate`, not the grader role inside `evaluate-model`:
+
+```bash
+srg evaluate-reviewer <candidate-reviewer>
+srg evaluate-reviewer <candidate-reviewer> --compare-to llama3.1:8b
+```
+
+Only `--profile smoke` exists (32 reviewer calls, about 5-15 minutes). A
+larger profile waits until the metrics are shown to separate real models.
+
+### Why it is not `evaluate-model` pointed at a reviewer
+
+`evaluate-model` assigns each result from the reviewer's structured
+observations precisely *because* reviewer verdicts were unreliable
+(see [Standard profile](#standard-profile)). That logic exists to compensate
+for reviewer defects, so reusing it here would measure the compensation. The
+two commands share only model-lifecycle and formatting helpers.
+
+### The asymmetry that drives the design
+
+The reviewer emits a free-text critique that a **separate generator** then
+executes, correcting every issue it raises. So a missed defect leaves one flaw
+in the draft, while an invented defect *creates* one. For a reviewer,
+precision outranks recall — the reverse of a grader — which is why the corpus
+includes clean drafts and why requesting changes to them counts against a
+model.
+
+### How it works
+
+Each of the two fictional cases ships one clean draft plus seven variants,
+each carrying exactly one seeded defect (dropped analyst fact, wrong customer
+parameter, unsupported claim, wrong-control content, omitted control clause,
+weak validation, validations left in the narrative). Ground truth is exact by
+construction, so **every check is deterministic and no model grades the
+reviewer** — an LLM judge would reintroduce the defect being measured.
+
+The report covers:
+
+- **Cost** — seconds per critique, critique length, and the peak memory with
+  the generation, reviewer, and embedding models resident *simultaneously*.
+  That last figure is the one that governs: a review pass alternates generator
+  and reviewer up to four times per control, so a reviewer that is individually
+  small but tips the total over available VRAM causes the eviction thrash
+  described in [Troubleshooting](#troubleshooting). To measure it rather than
+  estimate it, the generation and embedding models are loaded and left
+  resident; neither is ever prompted.
+- **Bottom line** — unwarranted changes demanded, and how many were demanded
+  per real defect found. Every fixture draft carries at most one defect, so at
+  most one demanded change is warranted; everything beyond that asks the
+  generator to alter content that is already correct.
+- **Invention** — changes demanded on clean drafts, and demands to alter
+  content the sources explicitly support. Reported *before* detection on
+  purpose: reading detection first invites ranking reviewers by defects found,
+  which is backwards for a role where the generator applies every demand.
+- **Detection** — which seeded defects each reviewer named. A miss leaves the
+  draft as the generator wrote it, where the human review SRG already requires
+  can still catch it. Do not trade invention for detection.
+- **Containment** — violations of the reviewer prompt's explicit prohibitions:
+  suggesting other controls, rewriting the draft, hedging, role confusion, and
+  analyst-directed questions. Naming another control to *remove* stray content
+  is correct behavior and is not counted.
+- **Consistency and output discipline** — critique distinctness, schema
+  failures, responses that were empty, and how often the model ran to the token
+  ceiling. Distinctness near zero means it emits nearly the same critique
+  regardless of the draft, which no per-item metric can detect and which SRG
+  has observed in practice.
+
+Each critique is capped at 3072 tokens. Uncapped, a reviewer that fails to stop
+generates until it exhausts `num_ctx`, at which point Ollama shifts the context
+window and the request never returns — observed with `phi4-mini`, which decoded
+59,000 tokens over nearly 16 minutes on an ordinary draft while sitting fully
+on GPU at full speed. The cap turns that hang into a reported finding. Note
+that `srg generate --review` and `bulk-generate` call the reviewer without a
+ceiling and carry the same exposure.
+
+The ceiling has to allow for hidden reasoning. Ollama bills a thinking model's
+reasoning against `num_predict` but reports only content in `eval_count`, so
+too low a cap makes such a reviewer return *nothing* while the timings look
+normal — and an empty critique otherwise reads as flawless restraint. Empty
+responses are therefore scored as failures rather than restraint, and average
+hidden reasoning is reported beside them as a cost in its own right.
+
+Artifacts land in a timestamped folder under `reviewer_evaluation_runs/`:
+`summary.txt`, `results.json` (every critique verbatim), `critiques.md` (a
+worksheet pairing each critique with the defect that was seeded), and
+`answer-key.md`.
+
+### Limits
+
+This measures what a critique *says*, not what the generator does with it;
+`srg generate --review` remains the end-to-end check. At smoke scale each
+defect is a single observation, so the candidate-versus-comparison difference
+is the signal rather than any individual cell. Thresholds ship uncalibrated.
+
+See [Reviewer evaluation](reviewer-evaluation.md) for the full design brief,
+the defect taxonomy, the scoring mechanics, and the calibration procedure.
+
 ## Keep_alive, temperature, and seed
 
 After each generation request, SRG asks Ollama to keep the generation model
@@ -820,7 +929,9 @@ expected" in [Troubleshooting](#troubleshooting).
   [Choosing a generation model](#choosing-a-generation-model) for tested
   models and results.
 - **Reviewer model**: Gemma4 E2B QAT via Ollama by default, independently
-  swappable through `SRG_REVIEW_MODEL`
+  swappable through `SRG_REVIEW_MODEL`; see
+  [Evaluate a reviewer model](#evaluate-a-reviewer-model) for how to compare
+  candidates
 - **Embedding model**: EmbeddingGemma via Ollama
 - **Vector store**: ChromaDB (embedded/local, no server)
 - **CLI**: [Typer](https://typer.tiangolo.com)
@@ -1027,6 +1138,9 @@ security-response-generator/
 ├── src/security_response_generator/
 │   ├── cli.py                       # update, ingest, engagement, generation, and bulk-generate commands
 │   ├── config.py                    # models, paths, chunking, top-k (env-overridable)
+│   ├── model_evaluation*.py         # generation-model comparison harness
+│   ├── reviewer_evaluation*.py      # reviewer-critique harness and deterministic scoring
+│   ├── evaluation_data/             # frozen fictional evaluation corpora
 │   ├── ingest/                      # loaders, chunking, manifest, Chroma store
 │   ├── generation/                  # retrieval, prompt assembly, ASCII normalizer
 │   └── llm/ollama_client.py         # Ollama embed/chat wrapper
@@ -1051,6 +1165,19 @@ security-response-generator/
   validation rules.
 - **Model pull is slow/fails**: check disk space and network
   connectivity.  Ollama parallelizes model pulls, which quickly runs afoul of default network settings in WSL2 and Windows.
+- **`srg evaluate-reviewer` shows a low "All three resident" count**: Ollama
+  is evicting one of the generation, reviewer, and embedding models to fit the
+  others, which is the same pressure a real `--review` pass creates. That is a
+  finding about the candidate reviewer's size on your hardware, not a failure
+  of the run — compare the "Peak with gen + embed" column against your
+  available VRAM.
+- **`srg evaluate-reviewer` reports detections you disagree with**: detection
+  is deterministic marker matching, so a correct critique phrased entirely in
+  paraphrase scores as a miss. Read `critiques.md` and, if the markers are
+  genuinely wrong, fix them in
+  `src/security_response_generator/evaluation_data/reviewer_critique_smoke.json`
+  before trusting a run. See
+  [Reviewer evaluation](reviewer-evaluation.md).
 - **Responses are much slower than expected**: run `ollama ps` to check
   whether the model is fully on GPU or partially spilled to system RAM/CPU
   (Ollama does this automatically and silently if VRAM is tight, and it's a
@@ -1154,6 +1281,19 @@ end-to-end behavior manually after setup:
     completes noninteractively, writes one file per row, the bogus row's file
     contains a "No matching NIST baseline content found" note, and the
     printed summary counts match (clean vs. with notes)
+17. `srg evaluate-reviewer gemma4:e2b-it-qat` — confirm the run completes
+    inside its estimate and every table is populated
+18. Run the same command against a reviewer known to over-flag. The metrics
+    must separate it from the default on **restraint** (directives per clean
+    draft, hard false positives) and **distinctness**. If they do not, the
+    metrics are wrong rather than the model, and the thresholds need work
+    before the numbers mean anything
+19. Read `critiques.md` from that run end to end — 32 critiques — and check
+    each deterministic detection verdict against your own reading of the
+    critique. Marker matching is the load-bearing assumption of the command
+20. On a memory-constrained machine, check the "Peak with gen + embed" and
+    "All three resident" columns against available VRAM, and cross-check
+    `load_duration` in `results.json` for eviction between calls
 
 ## License
 

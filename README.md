@@ -182,6 +182,27 @@ for smoke's timing thresholds, quality checks, and output artifacts.
 SRG, rather than the reviewer model, assigns each result — from the reviewer's
 structured observations plus checks SRG performs itself.
 
+## Evaluate a reviewer model
+
+`srg generate --review` and `bulk-generate` use a second, separately
+configurable model to critique each draft before the generator revises it.
+To compare candidates for that role:
+
+```bash
+srg evaluate-reviewer <candidate-reviewer>
+```
+
+Each fixture draft carries exactly one deliberately seeded defect, so every
+check is deterministic and no model grades the reviewer. The run reports
+whether a reviewer finds real defects, whether it leaves good drafts alone,
+and whether it can stay resident alongside the generation and embedding
+models. Restraint matters as much as detection: the generator corrects every
+issue a critique raises, so an invented defect creates a flaw rather than
+merely missing one.
+
+This is a small, experimental, smoke-scale command; see
+[Reviewer evaluation](docs/reviewer-evaluation.md).
+
 ## Common next steps
 
 ```bash
