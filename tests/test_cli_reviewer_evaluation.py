@@ -52,14 +52,19 @@ def test_the_plan_states_what_is_and_is_not_measured(monkeypatch, tmp_path):
     result = _invoke(tmp_path)
 
     assert "Candidate reviewer:  candidate:latest" in result.output
-    assert "Review/revision critique, not the evaluate-model grader" in result.output
-    assert "32 total (16 per reviewer)" in result.output
+    assert "Atomic requirement/statement review, not full-response critique" in result.output
+    assert "20 total (10 per reviewer)" in result.output
     assert "no model grades the reviewer" in result.output
-    assert "generator corrects every issue a critique raises" in result.output
+    assert "supported, missing, contradicts, or adds unsupported info" in result.output
+    assert "Only an exact match to the frozen classification is scored" in result.output
+    assert "Optional constructive feedback is retained but never scored" in result.output
+    assert "Prose quality and stylistic preferences are not judged" in result.output
+    assert "secondary diagnostic" in result.output
     assert "srg generate --review" in result.output
     assert "SMOKE - development feedback, not qualification evidence" in result.output
+    assert "newest 20 recognized runs kept" in result.output
     assert "No active engagement data will be used" in result.output
-    assert "SRG_REVIEW_MODEL is never changed" in result.output
+    assert "Environment:         Settings are not modified" in result.output
 
 
 def test_the_plan_names_every_draft_condition(monkeypatch, tmp_path):
@@ -78,11 +83,13 @@ def test_the_plan_explains_why_other_models_are_loaded(monkeypatch, tmp_path):
     assert "coexistence" in result.output
 
 
-def test_reviewing_your_own_generation_model_is_allowed_and_called_out(monkeypatch, tmp_path):
+def test_plan_says_statements_are_fixed_and_only_reviewers_must_differ(monkeypatch, tmp_path):
     _patch_preflight(monkeypatch)
     result = _invoke(tmp_path)
-    assert "reviewing" in result.output
-    assert "one's own output is a legitimate thing to measure" in result.output
+    assert "one fixed mock generated" in result.output
+    assert "no analyst or engagement context" in result.output
+    assert "candidate and comparison reviewers must be different" in result.output
+    assert "candidate may be any installed local model" in result.output
 
 
 def test_a_profile_other_than_smoke_is_refused(monkeypatch, tmp_path):
@@ -122,6 +129,34 @@ def test_confirming_runs_the_evaluation_and_prints_the_summary(monkeypatch, tmp_
 
     assert result.exit_code == 0, result.output
     assert "SUMMARY BODY" in result.output
+
+
+def test_confirmation_accepts_y_or_yes_case_insensitively(monkeypatch, tmp_path):
+    _patch_preflight(monkeypatch)
+    monkeypatch.setattr(
+        cli.reviewer_evaluation, "run_evaluation", lambda *a, **k: _fake_result(tmp_path)
+    )
+    monkeypatch.setattr(cli.reviewer_evaluation, "render_summary", lambda *a, **k: "SUMMARY BODY")
+
+    for answer in ("y", "Y", "yes", "YES", "Yes"):
+        result = _invoke(tmp_path, input_text=f"{answer}\n")
+        assert result.exit_code == 0, result.output
+        assert "SUMMARY BODY" in result.output
+
+
+def test_any_other_confirmation_answer_aborts_without_reprompting(monkeypatch, tmp_path):
+    _patch_preflight(monkeypatch)
+    monkeypatch.setattr(
+        cli.reviewer_evaluation,
+        "run_evaluation",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("must not run")),
+    )
+
+    result = _invoke(tmp_path, input_text="maybe\n")
+
+    assert result.exit_code == 1, result.output
+    assert result.output.count("Proceed with this reviewer evaluation?") == 1
+    assert "Aborted." in result.output
 
 
 def test_an_interrupt_reports_the_preserved_artifacts(monkeypatch, tmp_path):

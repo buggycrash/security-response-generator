@@ -68,8 +68,8 @@ generation model connects the two even when the wording differs.
 - Repeatable model comparison for both roles SRG uses a model in:
   [`srg evaluate-model`](#evaluate-a-generation-model) for generation and
   [`srg evaluate-reviewer`](#evaluate-a-reviewer-model) for the
-  review/revision critique. Both run on committed fictional inputs and never
-  touch engagement data.
+  atomic comparison primitive intended for a future review pipeline. Both run
+  on committed fictional inputs and never touch engagement data.
 
 ## Caveats
 
@@ -749,16 +749,17 @@ and 44) per generation model:
 
 ## Evaluate a reviewer model
 
-`srg evaluate-reviewer` measures how well an installed model performs the
-**review/revision critique** role — the one used by `srg generate --review`
-and `bulk-generate`, not the grader role inside `evaluate-model`:
+`srg evaluate-reviewer` measures the basic decision needed by a future atomic
+review pipeline: can an installed model classify the relationship between one
+generated statement and one authoritative requirement? It is not the grader
+inside `evaluate-model`, and it does not audit a complete control response:
 
 ```bash
 srg evaluate-reviewer <candidate-reviewer>
 srg evaluate-reviewer <candidate-reviewer> --compare-to llama3.1:8b
 ```
 
-Only `--profile smoke` exists (32 reviewer calls, about 5-15 minutes). A
+Only `--profile smoke` exists (20 reviewer calls, about 5-15 minutes). A
 larger profile waits until the metrics are shown to separate real models.
 
 ### Why it is not `evaluate-model` pointed at a reviewer
@@ -769,81 +770,83 @@ observations precisely *because* reviewer verdicts were unreliable
 for reviewer defects, so reusing it here would measure the compensation. The
 two commands share only model-lifecycle and formatting helpers.
 
-### The asymmetry that drives the design
+### Why the evaluation is atomic
 
-The reviewer emits a free-text critique that a **separate generator** then
-executes, correcting every issue it raises. So a missed defect leaves one flaw
-in the draft, while an invented defect *creates* one. For a reviewer,
-precision outranks recall — the reverse of a grader — which is why the corpus
-includes clean drafts and why requesting changes to them counts against a
-model.
+Realistic multi-source fixtures established that the small local models could
+synthesize plausible responses but could not reliably audit the same dense
+material. The test now isolates the intended primitive. Every call contains one
+requirement sentence and one mock generated sentence, and the requirement is
+the complete factual and scope basis for that decision. No generator
+instructions, analyst input, retrieved source tiers, validations, or surrounding
+paragraphs are included.
+
+Clean paraphrases test restraint. Unsupported implementation and wrong-control
+claims test whether the model rejects information absent from the complete
+grounding basis.
 
 ### How it works
 
-Each of the two fictional cases ships one clean draft plus seven variants,
-each carrying exactly one seeded defect (dropped analyst fact, wrong customer
-parameter, unsupported claim, wrong-control content, omitted control clause,
-weak validation, validations left in the narrative). Ground truth is exact by
-construction, so **every check is deterministic and no model grades the
-reviewer** — an LLM judge would reintroduce the defect being measured.
+Each of the two fictional requirements has five fixed, hand-authored,
+single-claim variants: clean, missing required information, incorrect required
+information, unsupported implementation claim, and wrong-control content. The
+model chooses `supported`, `missing_required_information`,
+`contradicts_requirement`, or `adds_unsupported_information`. The two
+unsupported scenario types share the last classification.
 
-The report covers:
+SRG knows the expected answer for every fixture, so **every check is
+deterministic and no model grades the reviewer**. Optional
+`constructive_feedback` is retained in the human worksheet but is never
+interpreted or scored.
 
-- **Cost** — seconds per critique, critique length, and the peak memory with
-  the generation, reviewer, and embedding models resident *simultaneously*.
-  That last figure is the one that governs: a review pass alternates generator
-  and reviewer up to four times per control, so a reviewer that is individually
-  small but tips the total over available VRAM causes the eviction thrash
-  described in [Troubleshooting](#troubleshooting). To measure it rather than
-  estimate it, the generation and embedding models are loaded and left
-  resident; neither is ever prompted.
-- **Bottom line** — unwarranted changes demanded, and how many were demanded
-  per real defect found. Every fixture draft carries at most one defect, so at
-  most one demanded change is warranted; everything beyond that asks the
-  generator to alter content that is already correct.
-- **Invention** — changes demanded on clean drafts, and demands to alter
-  content the sources explicitly support. Reported *before* detection on
-  purpose: reading detection first invites ranking reviewers by defects found,
-  which is backwards for a role where the generator applies every demand.
-- **Detection** — which seeded defects each reviewer named. A miss leaves the
-  draft as the generator wrote it, where the human review SRG already requires
-  can still catch it. Do not trade invention for detection.
-- **Containment** — violations of the reviewer prompt's explicit prohibitions:
-  suggesting other controls, rewriting the draft, hedging, role confusion, and
-  analyst-directed questions. Naming another control to *remove* stray content
-  is correct behavior and is not counted.
-- **Consistency and output discipline** — critique distinctness, schema
-  failures, responses that were empty, and how often the model ran to the token
-  ceiling. Distinctness near zero means it emits nearly the same critique
-  regardless of the draft, which no per-item metric can detect and which SRG
-  has observed in practice.
+The report is intentionally compact:
+
+- **Classification accuracy** — correct and wrong answers side by side, followed
+  by invalid or empty outputs.
+- **Operational profile** — median/maximum response time and JSON size, hidden
+  reasoning, token-ceiling hits, distinctness, and actual simultaneous
+  residency. A coexistence peak is shown only when generation, reviewer, and
+  embedding models were all present; otherwise it reports `FAILED`.
+- **Classification detail** — expected and returned classifications for every
+  scenario and case.
+
+Distinctness near zero means the model emits nearly the same classification
+regardless of the statement. It uses only valid classification values, so
+varied constructive prose cannot improve it. Invalid and empty responses are
+excluded.
 
 Each critique is capped at 3072 tokens. Uncapped, a reviewer that fails to stop
 generates until it exhausts `num_ctx`, at which point Ollama shifts the context
 window and the request never returns — observed with `phi4-mini`, which decoded
 59,000 tokens over nearly 16 minutes on an ordinary draft while sitting fully
-on GPU at full speed. The cap turns that hang into a reported finding. Note
+on GPU at full speed. The cap turns that hang into a reported failure. Note
 that `srg generate --review` and `bulk-generate` call the reviewer without a
 ceiling and carry the same exposure.
 
 The ceiling has to allow for hidden reasoning. Ollama bills a thinking model's
 reasoning against `num_predict` but reports only content in `eval_count`, so
 too low a cap makes such a reviewer return *nothing* while the timings look
-normal — and an empty critique otherwise reads as flawless restraint. Empty
-responses are therefore scored as failures rather than restraint, and average
+normal. Empty responses are therefore invalid rather than restraint, and average
 hidden reasoning is reported beside them as a cost in its own right.
 
 Artifacts land in a timestamped folder under `reviewer_evaluation_runs/`:
-`summary.txt`, `results.json` (every critique verbatim), `critiques.md` (a
-worksheet pairing each critique with the defect that was seeded), and
-`answer-key.md`.
+`summary.txt`; `results.json`, the verbatim machine-readable record;
+`critiques.md`, a human-oriented audit trail connecting supplied grounding, the
+mock statement, expected and returned classifications, and optional unscored
+constructive feedback; and `answer-key.md`.
+
+The newest 20 recognized reviewer-evaluation runs are retained. Completed,
+interrupted, and failed run directories count toward that limit; unrelated
+directories are ignored.
 
 ### Limits
 
-This measures what a critique *says*, not what the generator does with it;
-`srg generate --review` remains the end-to-end check. At smoke scale each
-defect is a single observation, so the candidate-versus-comparison difference
-is the signal rather than any individual cell. Thresholds ship uncalibrated.
+This measures an atomic classification, not full-response auditing, statement
+decomposition, requirement matching, or what the generator does next. Production
+`srg generate --review` is unchanged and remains the end-to-end check. Prose
+quality, feedback usefulness, and style are deliberately excluded. At smoke
+scale each scenario is a single observation, so repeat comparisons before
+treating a small difference as stable. Suite version 4 is not numerically
+comparable to older reviewer runs.
 
 See [Reviewer evaluation](reviewer-evaluation.md) for the full design brief,
 the defect taxonomy, the scoring mechanics, and the calibration procedure.
@@ -1165,16 +1168,14 @@ security-response-generator/
   validation rules.
 - **Model pull is slow/fails**: check disk space and network
   connectivity.  Ollama parallelizes model pulls, which quickly runs afoul of default network settings in WSL2 and Windows.
-- **`srg evaluate-reviewer` shows a low "All three resident" count**: Ollama
-  is evicting one of the generation, reviewer, and embedding models to fit the
+- **`srg evaluate-reviewer` reports failed model coexistence**: Ollama is
+  evicting one of the generation, reviewer, and embedding models to fit the
   others, which is the same pressure a real `--review` pass creates. That is a
   finding about the candidate reviewer's size on your hardware, not a failure
-  of the run — compare the "Peak with gen + embed" column against your
-  available VRAM.
-- **`srg evaluate-reviewer` reports detections you disagree with**: detection
-  is deterministic marker matching, so a correct critique phrased entirely in
-  paraphrase scores as a miss. Read `critiques.md` and, if the markers are
-  genuinely wrong, fix them in
+  of the run. A peak appears only when all three models were actually resident.
+- **`srg evaluate-reviewer` reports classifications you disagree with**: the
+  score is an exact comparison with the frozen expected classification. Read
+  `critiques.md` and, if the answer key is genuinely wrong, fix it in
   `src/security_response_generator/evaluation_data/reviewer_critique_smoke.json`
   before trusting a run. See
   [Reviewer evaluation](reviewer-evaluation.md).
@@ -1283,17 +1284,17 @@ end-to-end behavior manually after setup:
     printed summary counts match (clean vs. with notes)
 17. `srg evaluate-reviewer gemma4:e2b-it-qat` — confirm the run completes
     inside its estimate and every table is populated
-18. Run the same command against a reviewer known to over-flag. The metrics
-    must separate it from the default on **restraint** (directives per clean
-    draft, hard false positives) and **distinctness**. If they do not, the
-    metrics are wrong rather than the model, and the thresholds need work
-    before the numbers mean anything
-19. Read `critiques.md` from that run end to end — 32 critiques — and check
-    each deterministic detection verdict against your own reading of the
-    critique. Marker matching is the load-bearing assumption of the command
-20. On a memory-constrained machine, check the "Peak with gen + embed" and
-    "All three resident" columns against available VRAM, and cross-check
-    `load_duration` in `results.json` for eviction between calls
+18. Run the same command against a known weak classifier. The metrics must
+    separate it from the default on overall accuracy, clean restraint, or the
+    scenario-level classifications. Compare classification-only distinctness as
+    a secondary collapse diagnostic
+19. Read `critiques.md` from that run end to end — 20 decisions — and compare
+    the supplied grounding, mock statement, expected classification, actual
+    classification, and any optional unscored constructive feedback
+20. On a memory-constrained machine, check `Gen + reviewer + embed`. It must say
+    `FAILED` if any model was absent; otherwise compare its observed peak with
+    available VRAM. Cross-check `load_duration` and residency snapshots in
+    `results.json` for eviction between calls
 
 ## License
 

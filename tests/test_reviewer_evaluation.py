@@ -1,7 +1,4 @@
-"""Reviewer-evaluation harness, driven entirely offline.
-
-Every model call is stubbed: no Ollama daemon, no downloaded weights.
-"""
+"""Offline tests for the atomic reviewer-classification harness."""
 
 import json
 
@@ -9,25 +6,25 @@ import pytest
 
 from security_response_generator import reviewer_evaluation
 from security_response_generator.reviewer_evaluation import (
-    CLEAN_CONDITION,
+    EVALUATION_REVIEW_SCHEMA,
     PROFILES,
     CritiqueRecord,
     ReviewerEvaluationInterrupted,
     ReviewerEvaluationResult,
-    case_prompt,
+    assemble_evaluation_review_messages,
     detection_grid,
     render_summary,
     run_evaluation,
     score_record,
     summarize_role,
 )
+from security_response_generator.reviewer_evaluation_scoring import EXPECTED_CLASSIFICATIONS
 
 CASES = PROFILES["smoke"].load_cases()
 
 
 @pytest.fixture(autouse=True)
 def _no_real_models(monkeypatch):
-    """Neutralize every Ollama touchpoint the run loop makes."""
     monkeypatch.setattr(reviewer_evaluation, "unload_models", lambda models: None)
     monkeypatch.setattr(reviewer_evaluation, "embed_query", lambda text: [0.0])
     monkeypatch.setattr(reviewer_evaluation, "load_model", lambda model: None)
@@ -38,316 +35,247 @@ def _no_real_models(monkeypatch):
     )
 
 
-def _critique_stub(text_for=lambda case_id, condition: "No changes are needed."):
-    """Build a stub that answers based on which draft it was handed."""
+def _reply_for(case_id, condition):
+    return {
+        "classification": EXPECTED_CLASSIFICATIONS[condition],
+        "constructive_feedback": f"Human-only explanation for {case_id} {condition}.",
+    }
+
+
+def _review_stub(reply_for=_reply_for):
     seen = []
 
-    def critique(
-        messages, response_format=None, *, model, seed, num_predict=None, on_response=None
-    ):
-        payload = messages[1]["content"]
-        case_id = "si5-alert-handling" if "SI-5" in payload else "ra5-scan-scope"
-        condition = next(
-            (
-                item.condition
-                for case in CASES
-                if case.id == case_id
-                for item in case.drafts
-                if item.draft_json in payload
-            ),
-            CLEAN_CONDITION,
+    def review(messages, response_format=None, *, model, seed, num_predict=None, on_response=None):
+        payload = json.loads(messages[1]["content"])
+        case = next(case for case in CASES if case.control_id == payload["control_id"])
+        item = next(
+            item
+            for item in case.drafts
+            if item.mock_generated_draft == payload["mock_generated_draft"]
         )
-        seen.append((model, seed, case_id, condition))
+        seen.append((model, seed, case.id, item.condition, response_format, messages, num_predict))
         if on_response is not None:
             on_response({"model": model, "total_duration": 1_000_000_000})
-        return json.dumps({"critique": text_for(case_id, condition)})
+        return json.dumps(reply_for(case.id, item.condition))
 
-    critique.seen = seen
-    return critique
+    review.seen = seen
+    return review
 
 
-def _run(tmp_path, critique):
+def _run(tmp_path, review):
     return run_evaluation(
         "candidate:test",
         "comparison:test",
-        "GENERATOR INSTRUCTIONS",
         tmp_path,
-        critique=critique,
+        critique=review,
     )
 
 
-# --- Run loop ---------------------------------------------------------------
-
-
-def test_run_covers_every_draft_for_both_reviewers(tmp_path):
-    critique = _critique_stub()
-    result = _run(tmp_path, critique)
-
+def test_run_covers_five_statements_per_case_for_both_reviewers(tmp_path):
+    review = _review_stub()
+    result = _run(tmp_path, review)
     expected = PROFILES["smoke"].item_count(CASES)
+    assert expected == 10
     assert len(result.for_role("candidate")) == expected
     assert len(result.for_role("comparison")) == expected
-    assert len(critique.seen) == expected * 2
+    assert len(review.seen) == 20
 
 
-def test_each_reviewer_is_called_with_its_own_model_name(tmp_path):
-    critique = _critique_stub()
-    _run(tmp_path, critique)
-    assert {model for model, *_ in critique.seen} == {"candidate:test", "comparison:test"}
+def test_each_reviewer_uses_its_model_and_four_way_schema(tmp_path):
+    review = _review_stub()
+    _run(tmp_path, review)
+    assert {model for model, *_ in review.seen} == {"candidate:test", "comparison:test"}
+    assert all(call[4] == EVALUATION_REVIEW_SCHEMA for call in review.seen)
+    assert EVALUATION_REVIEW_SCHEMA["required"] == ["classification"]
+    assert EVALUATION_REVIEW_SCHEMA["properties"]["classification"]["enum"] == [
+        "supported",
+        "missing_required_information",
+        "contradicts_requirement",
+        "adds_unsupported_information",
+    ]
+    assert "constructive_feedback" in EVALUATION_REVIEW_SCHEMA["properties"]
 
 
-def test_the_reviewer_receives_the_production_prompt_shape(tmp_path):
-    """The reviewer's prompt embeds the generator's own instructions verbatim."""
-    captured = {}
-
-    def critique(
-        messages, response_format=None, *, model, seed, num_predict=None, on_response=None
-    ):
-        captured.setdefault("messages", messages)
-        return json.dumps({"critique": "No changes are needed."})
-
-    _run(tmp_path, critique)
-    system, user = captured["messages"]
-    assert system["role"] == "system"
-    assert "quality reviewer" in system["content"]
-    assert "GENERATOR SYSTEM INSTRUCTIONS AND ANALYST FACTS:" in user["content"]
-    assert "DRAFT RESPONSE (structured JSON):" in user["content"]
-    assert "GENERATOR INSTRUCTIONS" in user["content"]
+def test_prompt_uses_one_requirement_and_one_statement(tmp_path):
+    review = _review_stub()
+    _run(tmp_path, review)
+    messages = review.seen[0][5]
+    instruction = messages[0]["content"]
+    assert "Classify the relationship" in instruction
+    assert "Use no outside knowledge and assess nothing else" in instruction
+    assert "An unrelated statement is adds_unsupported_information" in instruction
+    assert "constructive_feedback" in instruction
+    payload = json.loads(messages[1]["content"])
+    assert set(payload) == {"control_id", "grounding_information", "mock_generated_draft"}
+    assert payload["grounding_information"].count(".") == 1
+    assert payload["mock_generated_draft"].count(".") == 1
+    assert "analyst" not in messages[1]["content"].casefold()
 
 
-def test_the_generation_and_embedding_models_are_made_resident(tmp_path, monkeypatch):
-    """Coexistence is measured, not estimated, so both must really be loaded."""
+def test_generation_and_embedding_models_are_loaded_only_for_coexistence(tmp_path, monkeypatch):
     loaded = []
     embedded = []
+    unloaded = []
+    monkeypatch.setattr(reviewer_evaluation, "unload_models", unloaded.append)
     monkeypatch.setattr(reviewer_evaluation, "load_model", loaded.append)
-    monkeypatch.setattr(reviewer_evaluation, "embed_query", lambda text: embedded.append(text))
-    _run(tmp_path, _critique_stub())
-    assert loaded and all(model == reviewer_evaluation.config.GENERATION_MODEL for model in loaded)
+    monkeypatch.setattr(reviewer_evaluation, "embed_query", embedded.append)
+    _run(tmp_path, _review_stub())
+    assert loaded and set(loaded) == {reviewer_evaluation.config.GENERATION_MODEL}
     assert embedded
+    assert unloaded
+    assert all(reviewer_evaluation.config.GENERATION_MODEL in models for models in unloaded)
+    assert all(reviewer_evaluation.config.EMBEDDING_MODEL not in models for models in unloaded)
 
 
-def test_an_interrupt_preserves_the_completed_work(tmp_path):
+def test_failed_preparation_preserves_diagnostics(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        reviewer_evaluation,
+        "unload_models",
+        lambda models: (_ for _ in ()).throw(OSError("Ollama did not unload model(s): x")),
+    )
+    with pytest.raises(OSError, match="partial artifacts are in"):
+        _run(tmp_path, _review_stub())
+    run_dir = next(tmp_path.iterdir())
+    payload = json.loads(run_dir.joinpath("results.json").read_text())
+    assert payload["status"] == "failed"
+    assert payload["incomplete_operation"]["stage"] == "preparation"
+    assert "Ollama did not unload model(s): x" in run_dir.joinpath("ERROR.txt").read_text()
+
+
+def test_reviewer_retention_keeps_newest_twenty_and_ignores_unrelated(tmp_path):
+    created = []
+    for index in range(22):
+        run_dir = tmp_path / f"20260101_0000{index:02d}_model"
+        run_dir.mkdir()
+        run_dir.joinpath(reviewer_evaluation._RUN_MARKER).touch()
+        created.append(run_dir)
+    unrelated = tmp_path / "personal-notes"
+    unrelated.mkdir()
+    removed = reviewer_evaluation.prune_reviewer_evaluation_runs(tmp_path)
+    assert len(removed) == 2
+    assert not created[0].exists()
+    assert not created[1].exists()
+    assert all(path.exists() for path in created[2:])
+    assert unrelated.is_dir()
+
+
+def test_interrupt_preserves_completed_work(tmp_path):
     calls = []
 
-    def critique(
+    def interrupting(
         messages, response_format=None, *, model, seed, num_predict=None, on_response=None
     ):
         calls.append(model)
         if len(calls) == 5:
             raise KeyboardInterrupt
-        return json.dumps({"critique": "Add the missing detail."})
+        return json.dumps({"classification": "supported"})
 
     with pytest.raises(ReviewerEvaluationInterrupted) as excinfo:
-        _run(tmp_path, critique)
-
+        _run(tmp_path, interrupting)
     payload = json.loads((excinfo.value.output_dir / "results.json").read_text())
     assert payload["status"] == "interrupted"
     assert len(payload["records"]) == 4
-    assert payload["incomplete_operation"]["stage"] == "critique"
 
 
-# --- Scoring integration ----------------------------------------------------
-
-
-def test_a_silent_reviewer_detects_nothing_and_stays_restrained(tmp_path):
-    result = _run(tmp_path, _critique_stub())
+def test_expected_classifications_score_full_accuracy(tmp_path):
+    result = _run(tmp_path, _review_stub())
     summary = summarize_role(result, "candidate", "candidate:test")
-
-    assert summary.detected == 0
-    assert summary.clean_directives == 0
-    assert summary.clean_silent == summary.clean_items
-    assert summary.hard_false_alarms == 0
+    assert summary.correct == summary.items == 10
+    assert summary.incorrect == summary.invalid_decisions == 0
 
 
-def test_a_reviewer_that_names_each_seeded_defect_scores_full_detection(tmp_path):
-    answers = {
-        "dropped_analyst_fact": {
-            "si5-alert-handling": "Add the missing CISA alert detail.",
-            "ra5-scan-scope": "State the weekly scan cadence explicitly.",
-        },
-        "wrong_customer_parameter": {
-            "si5-alert-handling": "Correct 72 hours to match the standard.",
-            "ra5-scan-scope": "Correct 45 days to match the standard.",
-        },
-        "unsupported_claim": {
-            "si5-alert-handling": "Remove the Example ThreatFeed Pro claim.",
-            "ra5-scan-scope": "Remove the Example Asset Discovery claim.",
-        },
-        "wrong_control_content": {
-            "si5-alert-handling": "Remove the incident response paragraph.",
-            "ra5-scan-scope": "Remove the annual risk assessment paragraph.",
-        },
-        "omitted_control_clause": {
-            "si5-alert-handling": "Add that the issuing organization is notified.",
-            "ra5-scan-scope": "Add that results are shared with designated personnel.",
-        },
-        "weak_validation": {
-            "si5-alert-handling": "Replace the access review screenshot.",
-            "ra5-scan-scope": "Replace the penetration test screenshot.",
-        },
-        "narrative_validations": {
-            "si5-alert-handling": "Remove the validation heading from the narrative.",
-            "ra5-scan-scope": "Remove the validation heading from the narrative.",
-        },
-    }
+def test_constructive_feedback_never_affects_scoring(tmp_path):
+    def wild_feedback(case_id, condition):
+        return {
+            "classification": EXPECTED_CLASSIFICATIONS[condition],
+            "constructive_feedback": "Invented nonsense that must remain human-only.",
+        }
+
+    result = _run(tmp_path, _review_stub(wild_feedback))
+    summary = summarize_role(result, "candidate", "candidate:test")
+    assert summary.correct == 10
+    worksheet = result.output_dir.joinpath("critiques.md").read_text()
+    assert "Invented nonsense that must remain human-only." in worksheet
+    assert "retained, not scored" in worksheet
+    assert "Invented nonsense" not in render_summary(result)
+
+
+def test_wrong_classification_is_counted_directly(tmp_path):
     result = _run(
         tmp_path,
-        _critique_stub(
-            lambda case_id, condition: answers.get(condition, {}).get(
-                case_id, "No changes are needed."
-            )
+        _review_stub(
+            lambda case_id, condition: {
+                "classification": "supported",
+                "constructive_feedback": "Always the same.",
+            }
         ),
     )
     summary = summarize_role(result, "candidate", "candidate:test")
-    assert summary.detected == summary.detectable
-    assert summary.detection_rate == pytest.approx(1.0)
+    assert summary.correct == 2
+    assert summary.incorrect == 8
+    assert summary.distinctness == pytest.approx(0)
 
 
-def test_a_hostile_reviewer_is_penalized_for_attacking_a_clean_draft(tmp_path):
-    """The granite failure mode, and the reason the clean condition exists."""
-    result = _run(
-        tmp_path,
-        _critique_stub(lambda case_id, condition: "Correct the 24 hours review window."),
+def test_invalid_outputs_are_excluded_from_distinctness(tmp_path):
+    calls = 0
+
+    def mixed(messages, response_format=None, *, model, seed, num_predict=None, on_response=None):
+        nonlocal calls
+        calls += 1
+        return "not json" if calls % 2 else json.dumps({"classification": "supported"})
+
+    result = _run(tmp_path, mixed)
+    summary = summarize_role(result, "candidate", "candidate:test")
+    assert summary.distinctness_samples == 5
+    assert summary.distinctness == 0
+
+
+def test_coexistence_peak_requires_all_three_models_to_be_resident(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        reviewer_evaluation,
+        "residency_snapshots",
+        lambda models: {
+            model: (
+                None if model == reviewer_evaluation.config.EMBEDDING_MODEL else {"size_bytes": 1}
+            )
+            for model in models
+        },
     )
-    summary = summarize_role(result, "candidate", "candidate:test")
-
-    si5_clean = next(
-        record
-        for record in result.for_role("candidate")
-        if record.case_id == "si5-alert-handling" and record.condition == CLEAN_CONDITION
-    )
-    assert si5_clean.hard_false_alarms
-    assert summary.hard_false_alarms > 0
-    assert summary.clean_silent == 0
+    summary = summarize_role(_run(tmp_path, _review_stub()), "candidate", "candidate:test")
+    assert summary.coexistence_intact == 0
+    assert summary.peak_coexistence_bytes is None
+    assert "FAILED 0/10" in render_summary(_run(tmp_path, _review_stub()))
 
 
-def test_a_constant_reviewer_is_caught_by_distinctness_not_by_any_item(tmp_path):
-    result = _run(tmp_path, _critique_stub(lambda case_id, condition: "Add more detail."))
-    summary = summarize_role(result, "candidate", "candidate:test")
-    assert summary.distinctness == pytest.approx(0.0)
+def test_every_call_has_a_token_ceiling(tmp_path):
+    review = _review_stub()
+    _run(tmp_path, review)
+    assert all(call[6] == reviewer_evaluation.REVIEWER_MAX_TOKENS for call in review.seen)
 
 
-def test_detection_is_undefined_rather_than_false_on_clean_drafts(tmp_path):
-    result = _run(tmp_path, _critique_stub())
-    clean = [
-        record for record in result.for_role("candidate") if record.condition == CLEAN_CONDITION
-    ]
-    assert clean and all(record.detected is None for record in clean)
-
-
-def test_every_critique_call_carries_a_token_ceiling(tmp_path):
-    """Without one, a reviewer that fails to stop hangs the entire batch.
-
-    Observed with phi4-mini: 59,000 tokens over 15m49s on a normal draft,
-    Ollama shifting the context window rather than ever returning.
-    """
-    seen = []
-
-    def critique(
-        messages, response_format=None, *, model, seed, num_predict=None, on_response=None
-    ):
-        seen.append(num_predict)
-        return json.dumps({"critique": "No changes are needed."})
-
-    _run(tmp_path, critique)
-    assert seen and all(value == reviewer_evaluation.REVIEWER_MAX_TOKENS for value in seen)
-
-
-def test_a_reviewer_that_never_stops_is_recorded_as_a_finding(tmp_path):
-    def critique(
-        messages, response_format=None, *, model, seed, num_predict=None, on_response=None
-    ):
-        if on_response is not None:
-            on_response({"model": model, "eval_count": num_predict})
-        return json.dumps({"critique": "Add detail. " * 200})
-
-    result = _run(tmp_path, critique)
-    summary = summarize_role(result, "candidate", "candidate:test")
-    assert summary.token_ceiling_hits == summary.items
-    assert "Ran to token ceiling" in render_summary(result)
-
-
-def test_a_healthy_critique_is_not_flagged_as_runaway(tmp_path):
-    def critique(
-        messages, response_format=None, *, model, seed, num_predict=None, on_response=None
-    ):
-        if on_response is not None:
-            on_response({"model": model, "eval_count": 381})
-        return json.dumps({"critique": "Add the missing detail."})
-
-    result = _run(tmp_path, critique)
-    assert summarize_role(result, "candidate", "candidate:test").token_ceiling_hits == 0
-
-
-def test_an_empty_response_is_never_scored_as_restraint(tmp_path):
-    """A thinking model can burn the whole token budget and return nothing.
-
-    Ollama bills hidden reasoning against num_predict but reports only content
-    in eval_count, so this looks like a reviewer that calmly requested no
-    changes. Crediting it would reward the failure and invert the comparison --
-    which is exactly what happened to gemma4:e2b-it-qat on 10 of 16 drafts.
-    """
-
-    def critique(
-        messages, response_format=None, *, model, seed, num_predict=None, on_response=None
-    ):
+def test_runaway_empty_and_schema_failures_are_reported(tmp_path):
+    def broken(messages, response_format=None, *, model, seed, num_predict=None, on_response=None):
         if on_response is not None:
             on_response(
                 {"model": model, "eval_count": num_predict, "message": {"thinking": "x" * 4700}}
             )
         return ""
 
-    result = _run(tmp_path, critique)
+    result = _run(tmp_path, broken)
     summary = summarize_role(result, "candidate", "candidate:test")
-
-    assert summary.empty_outputs == summary.items
-    assert summary.clean_silent == 0
+    assert summary.empty_outputs == summary.schema_failures == summary.items
+    assert summary.token_ceiling_hits == summary.items
+    assert summary.correct == 0
     assert summary.mean_thinking_chars == 4700
-    assert "No output at all" in render_summary(result)
-
-
-def test_a_reviewer_that_says_nothing_is_needed_does_earn_restraint(tmp_path):
-    """The affirmative case, to prove the empty-output rule is not overbroad."""
-    result = _run(tmp_path, _critique_stub())
-    summary = summarize_role(result, "candidate", "candidate:test")
-
-    assert summary.empty_outputs == 0
-    assert summary.clean_silent == summary.clean_items
-
-
-def test_hidden_reasoning_is_recorded_even_though_it_never_reaches_the_generator(tmp_path):
-    def critique(
-        messages, response_format=None, *, model, seed, num_predict=None, on_response=None
-    ):
-        if on_response is not None:
-            on_response({"model": model, "eval_count": 200, "message": {"thinking": "y" * 900}})
-        return json.dumps({"critique": "Add the missing detail."})
-
-    result = _run(tmp_path, critique)
-    assert summarize_role(result, "candidate", "candidate:test").mean_thinking_chars == 900
-    assert "Avg hidden reasoning" in render_summary(result)
-
-
-def test_the_token_ceiling_leaves_room_for_a_deliberative_reviewer(tmp_path):
-    """gemma4:e2b-it-qat needs ~1,400 tokens of reasoning before its first
-    content token; a ceiling at or below that starves it into silence."""
-    assert reviewer_evaluation.REVIEWER_MAX_TOKENS >= 3072
-
-
-def test_malformed_reviewer_output_is_counted_not_fatal(tmp_path):
-    def critique(
-        messages, response_format=None, *, model, seed, num_predict=None, on_response=None
-    ):
-        return "this is not JSON"
-
-    result = _run(tmp_path, critique)
-    summary = summarize_role(result, "candidate", "candidate:test")
-    assert summary.schema_failures == summary.items
+    assert summary.distinctness is None
+    report = render_summary(result)
+    assert "Token" in report
+    assert "10/10" in report
 
 
 def test_scoring_never_consults_a_model():
-    """No LLM grades the reviewer; that would reintroduce the measured defect."""
     case = CASES[0]
-    item = next(draft for draft in case.drafts if draft.condition == "wrong_customer_parameter")
+    item = case.drafts[2]
     record = CritiqueRecord(
         model="m",
         role="candidate",
@@ -355,68 +283,58 @@ def test_scoring_never_consults_a_model():
         control_id=case.control_id,
         condition=item.condition,
         seed=42,
-        raw=json.dumps({"critique": "Correct 72 hours to 24 hours."}),
-        critique="Correct 72 hours to 24 hours.",
-        wall_seconds=0.0,
+        raw=json.dumps({"classification": "contradicts_requirement"}),
+        wall_seconds=0,
     )
-    assert score_record(record, case, item).detected is True
+    scored = score_record(record, case, item)
+    assert scored.classification_correct
+    assert scored.expected_classification == "contradicts_requirement"
 
 
-# --- Reporting --------------------------------------------------------------
-
-
-def test_results_json_keeps_every_critique_verbatim(tmp_path):
-    result = _run(tmp_path, _critique_stub(lambda case_id, condition: f"Add {condition} detail."))
+def test_artifacts_preserve_inputs_decisions_and_unscored_feedback(tmp_path):
+    result = _run(tmp_path, _review_stub())
     payload = json.loads((result.output_dir / "results.json").read_text())
-    critiques = {record["critique"] for record in payload["records"]}
-    assert any("dropped_analyst_fact" in critique for critique in critiques)
-    assert payload["candidate_model"] == "candidate:test"
-
-
-def test_the_worksheet_pairs_each_critique_with_its_seeded_defect(tmp_path):
-    result = _run(tmp_path, _critique_stub(lambda case_id, condition: f"Add {condition} detail."))
+    assert payload["suite_version"] == reviewer_evaluation.REVIEWER_SUITE_VERSION == 4
+    assert payload["evaluation_cases"][0]["grounding_information"] == (
+        CASES[0].grounding_information
+    )
+    assert all("raw" in record for record in payload["records"])
     worksheet = (result.output_dir / "critiques.md").read_text()
-    assert "### Condition: wrong_customer_parameter" in worksheet
-    assert "Add wrong_customer_parameter detail." in worksheet
-    assert "hard false positive" in worksheet
-
-
-def test_the_answer_key_names_every_condition(tmp_path):
-    result = _run(tmp_path, _critique_stub())
+    assert "Authoritative requirement" in worksheet
+    assert "Mock generated statement" in worksheet
+    assert "Expected classification" in worksheet
+    assert "Reviewer classification" in worksheet
+    assert "Constructive feedback (retained, not scored)" in worksheet
+    assert "Human-only explanation" in worksheet
     key = (result.output_dir / "answer-key.md").read_text()
-    for condition in reviewer_evaluation.CONDITIONS:
-        assert f"`{condition}`" in key
+    assert "`clean` → `supported`" in key
+    assert "`unsupported_claim` → `adds_unsupported_information`" in key
 
 
-def test_the_summary_reports_every_measurement_area(tmp_path):
-    result = _run(tmp_path, _critique_stub())
-    summary = render_summary(result)
-    for heading in ("Bottom line", "Cost", "Invention", "Detection", "Containment", "Consistency"):
-        assert heading in summary
-    assert "critique quality only" in summary
+def test_invalid_reviewer_output_is_preserved_for_human_diagnosis(tmp_path):
+    result = _run(tmp_path, lambda *args, **kwargs: "not valid json")
+    worksheet = result.output_dir.joinpath("critiques.md").read_text()
+    assert "Invalid or empty reviewer response" in worksheet
+    assert "Raw response (could not be rendered as a classification)" in worksheet
+    assert "```text\nnot valid json\n```" in worksheet
 
 
-def test_invention_is_reported_before_detection(tmp_path):
-    """Leading with detection invites ranking reviewers by defects found,
-    which is backwards for a role where the generator applies every demand."""
-    summary = render_summary(_run(tmp_path, _critique_stub()))
-    assert summary.index("Invention:") < summary.index("Detection:")
+def test_summary_is_classification_focused(tmp_path):
+    summary = render_summary(_run(tmp_path, _review_stub()))
+    assert "Classification accuracy" in summary
+    assert "10/10" in summary
+    assert "Correct" in summary
+    assert "Wrong" in summary
+    assert "Invalid" in summary
+    assert "Classification detail" in summary
+    assert "Only the four-way classification is scored" in summary
+    assert "feedback" in summary
+    assert "SERIOUS" not in summary
+    assert "unusable reviewer fix" not in summary
+    assert "Failure profile" not in summary
 
 
-def test_the_summary_states_the_asymmetry_before_any_table(tmp_path):
-    summary = render_summary(_run(tmp_path, _critique_stub()))
-    assert summary.index("Invention is disqualifying") < summary.index("Bottom line")
-    assert "Do not trade invention for detection." in summary
-
-
-def test_the_summary_states_the_smoke_scale_caveat(tmp_path):
-    summary = render_summary(_run(tmp_path, _critique_stub()))
-    assert "one observation per defect" in summary
-    assert "uncalibrated" in summary
-
-
-def test_a_run_interrupted_before_any_critique_still_renders(tmp_path):
-    """An immediate Ctrl-C leaves zero records; the summary must not divide by it."""
+def test_interrupted_empty_result_still_renders(tmp_path):
     empty = ReviewerEvaluationResult(
         candidate_model="candidate:test",
         comparison_model="comparison:test",
@@ -433,139 +351,29 @@ def test_a_run_interrupted_before_any_critique_still_renders(tmp_path):
     assert "unknown" in summary
 
 
-def test_detection_grid_excludes_the_clean_condition(tmp_path):
-    result = _run(tmp_path, _critique_stub())
-    conditions = {row["condition"] for row in detection_grid(result)}
-    assert CLEAN_CONDITION not in conditions
-    assert len(conditions) == len(reviewer_evaluation.CONDITIONS) - 1
+def test_classification_grid_includes_clean_and_expected_answer(tmp_path):
+    rows = detection_grid(_run(tmp_path, _review_stub()))
+    assert len(rows) == 10
+    assert any(row["condition"] == "clean" and row["expected"] == "supported" for row in rows)
 
 
-def test_older_runs_are_pruned_but_this_one_survives(tmp_path):
-    first = _run(tmp_path, _critique_stub())
-    second = _run(tmp_path, _critique_stub())
-    assert first.output_dir.exists()
-    assert second.output_dir.exists()
+def test_atomic_prompt_is_built_from_frozen_corpus_without_retrieval():
+    messages = assemble_evaluation_review_messages(CASES[0], CASES[0].drafts[0])
+    payload = json.loads(messages[1]["content"])
+    assert payload["control_id"] == "SI-5"
+    assert payload["grounding_information"] == CASES[0].grounding_information
+    assert payload["mock_generated_draft"] == CASES[0].drafts[0].mock_generated_draft
 
 
-# --- Isolation from the generation-model harness ----------------------------
-
-
-def test_the_prompt_is_rebuilt_from_the_frozen_corpus_without_retrieval():
-    prompt = case_prompt(CASES[0], "INSTRUCTIONS")
-    assert prompt.system == "INSTRUCTIONS"
-    assert "Control ID: SI-5" in prompt.user
-    assert "Analyst-Provided Facts (Must Use)" in prompt.user
-
-
-def test_only_the_smoke_profile_is_offered():
-    """A standard profile waits until the metrics are shown to discriminate."""
+def test_only_smoke_profile_is_offered():
     assert set(PROFILES) == {"smoke"}
     assert reviewer_evaluation.DEFAULT_PROFILE == "smoke"
 
 
-def test_the_result_carries_no_generation_model_assessment(tmp_path):
-    """This command measures reviewers; it must not emit evaluate-model fields."""
-    result = _run(tmp_path, _critique_stub())
-    payload = json.loads((result.output_dir / "results.json").read_text())
+def test_result_has_no_generation_model_assessment(tmp_path):
+    payload = json.loads((_run(tmp_path, _review_stub()).output_dir / "results.json").read_text())
     assert "grades" not in payload
     assert "trials" not in payload
     for record in payload["records"]:
         assert "assessment" not in record
         assert "reviewer_assessment" not in record
-
-
-def test_summaries_are_computed_per_reviewer(tmp_path):
-    result = _run(
-        tmp_path,
-        _critique_stub(lambda case_id, condition: "Add the missing CISA alert detail."),
-    )
-    assert isinstance(result, ReviewerEvaluationResult)
-    candidate = summarize_role(result, "candidate", "candidate:test")
-    comparison = summarize_role(result, "comparison", "comparison:test")
-    assert candidate.items == comparison.items
-    assert candidate.model != comparison.model
-
-
-# --- The asymmetry between invention and omission ---------------------------
-
-
-def test_unwarranted_changes_counts_everything_beyond_the_seeded_defect(tmp_path):
-    """Exact ground truth is what makes this measurable: each draft carries at
-    most one defect, so one demand is warranted at most."""
-    result = _run(
-        tmp_path,
-        _critique_stub(lambda case_id, condition: "Add one thing. Remove another thing."),
-    )
-    summary = summarize_role(result, "candidate", "candidate:test")
-
-    # Two directives per draft over 16 drafts, minus one per correctly found defect.
-    assert summary.unwarranted_changes == 2 * summary.items - summary.detected
-
-
-def test_a_reviewer_that_invents_more_ranks_worse_despite_finding_more(tmp_path):
-    """The ordering this whole report exists to make obvious."""
-    finds_everything_but_invents = (
-        "Add the missing CISA alert detail. Remove the timeframe. Rewrite the heading. "
-        "Correct the owner. Replace the validations."
-    )
-
-    def critique(
-        messages, response_format=None, *, model, seed, num_predict=None, on_response=None
-    ):
-        text = (
-            finds_everything_but_invents if model == "candidate:test" else "No changes are needed."
-        )
-        return json.dumps({"critique": text})
-
-    result = _run(tmp_path, critique)
-    inventive = summarize_role(result, "candidate", "candidate:test")
-    quiet = summarize_role(result, "comparison", "comparison:test")
-
-    assert inventive.detected > quiet.detected
-    assert inventive.unwarranted_changes > quiet.unwarranted_changes
-    assert inventive.unwarranted_per_find > quiet.unwarranted_per_find
-
-
-def test_inventing_while_finding_nothing_is_the_worst_case(tmp_path):
-    result = _run(tmp_path, _critique_stub(lambda case_id, condition: "Rewrite the heading."))
-    summary = summarize_role(result, "candidate", "candidate:test")
-
-    assert summary.detected == 0
-    assert summary.unwarranted_changes > 0
-    assert summary.unwarranted_per_find == float("inf")
-    assert "invented, found nothing" in render_summary(result)
-
-
-def test_a_silent_reviewer_is_useless_but_not_scored_as_the_worst(tmp_path):
-    """Finding nothing while demanding nothing is harmless, not catastrophic.
-
-    Dividing by zero finds would otherwise put a quiet reviewer level with one
-    that invents freely.
-    """
-    summary = summarize_role(_run(tmp_path, _critique_stub()), "candidate", "candidate:test")
-
-    assert summary.detected == 0
-    assert summary.unwarranted_changes == 0
-    assert summary.unwarranted_per_find == 0.0
-
-
-def test_truncated_json_is_salvaged_so_syntax_is_not_scored_as_prose(tmp_path):
-    """A critique cut off at the ceiling leaves an unterminated object.
-
-    Scoring the brace, field name and escape sequences as critique text
-    inflates the directive count and overstates how aggressive the reviewer was.
-    """
-    body = "Add the missing detail.\\nRemove the extra clause."
-
-    def critique(
-        messages, response_format=None, *, model, seed, num_predict=None, on_response=None
-    ):
-        return '{\n  "critique": "' + body
-
-    result = _run(tmp_path, critique)
-    record = result.for_role("candidate")[0]
-
-    assert record.schema_failed, "the truncation must still be recorded as a failure"
-    assert not record.critique.startswith("{")
-    assert record.critique == "Add the missing detail.\nRemove the extra clause."
-    assert record.directive_count == 2

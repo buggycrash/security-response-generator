@@ -870,13 +870,12 @@ def evaluate_reviewer_command(
         help="Accept the displayed evaluation plan without an interactive confirmation.",
     ),
 ) -> None:
-    """Measure how well a model performs SRG's review/revision critique role.
+    """Measure a model's one-requirement, one-statement review decisions.
 
-    Each fixture draft carries at most one deliberately seeded defect, so the
-    right answer is known by construction and every check is deterministic --
-    no model grades the reviewer. The command measures what a critique says,
-    not what the generator does with it; `srg generate --review` remains the
-    end-to-end check.
+    Each decision contains one authoritative requirement and one mock generated
+    statement carrying at most one deliberately seeded defect. The right answer
+    is known by construction and every check is deterministic -- no model grades
+    the reviewer. This does not audit or revise a complete generated response.
     """
     if profile not in reviewer_evaluation.PROFILES:
         typer.echo(
@@ -910,19 +909,16 @@ def evaluate_reviewer_command(
         f"Candidate reviewer:  {candidate_reviewer}\n"
         f"Comparison reviewer: {compare_to} ({comparison_label})\n"
         "Profile:             SMOKE - development feedback, not qualification evidence\n"
-        "Role measured:       Review/revision critique, not the evaluate-model grader\n"
-        f"Cases:               {len(cases)} fictional control-response tasks\n"
-        f"Draft conditions:    {conditions}\n"
+        "Role measured:       Atomic requirement/statement review, not full-response critique\n"
+        f"Cases:               {len(cases)} fictional atomic requirements\n"
+        f"Statement conditions:{' ' if conditions else ''} {conditions}\n"
         f"Reviewer calls:      {items * 2} total ({items} per reviewer)\n"
         "Scoring:             Fully deterministic; no model grades the reviewer\n"
-        "Detection:           Each seeded defect must be named in the critique\n"
-        "Restraint:           Any change requested on a clean draft counts against the "
-        "reviewer,\n"
-        "                     because the generator corrects every issue a critique raises\n"
-        "Containment:         Suggesting other controls, rewriting, hedging, role "
-        "confusion,\n"
-        "                     and analyst-directed questions are each counted\n"
-        "Consistency:         Near-identical critiques across different drafts are flagged\n"
+        "Classification:      supported, missing, contradicts, or adds unsupported info\n"
+        "Accuracy:            Only an exact match to the frozen classification is scored\n"
+        "Feedback:            Optional constructive feedback is retained but never scored\n"
+        "Style:               Prose quality and stylistic preferences are not judged\n"
+        "Distinctness:        Repeated classifications are shown as a secondary diagnostic\n"
         f"Memory:              {config.GENERATION_MODEL} and {config.EMBEDDING_MODEL} are "
         "loaded but\n"
         "                     never prompted, so reviewer coexistence is measured under "
@@ -932,25 +928,32 @@ def evaluate_reviewer_command(
         "                     `srg generate --review` for that end-to-end check\n"
         f"Estimated time:      {reviewer_profile.estimate}\n"
         f"Artifacts:           timestamped folder under {output_dir}\n"
+        f"Retention:           newest {reviewer_evaluation.MAX_REVIEWER_EVALUATION_RUNS} "
+        "recognized runs kept\n"
         "Customer data:       No active engagement data will be used\n\n"
-        "A candidate reviewer may be the same model as the generation model; reviewing\n"
-        "one's own output is a legitimate thing to measure. After confirmation the run is\n"
-        "fully noninteractive. No source documents, indexes, or engagement data will be\n"
-        "modified, and SRG_REVIEW_MODEL is never changed."
+        "Environment:         Settings are not modified\n\n"
+        "Reviewer input:      One requirement sentence and one fixed mock generated\n"
+        "                     sentence per decision; no analyst or engagement context\n\n"
+        "The candidate and comparison reviewers must be different models. Apart from that,\n"
+        "the candidate may be any installed local model, including SRG's configured\n"
+        "generation model. After confirmation the run is fully noninteractive. No source\n"
+        "documents, indexes, or engagement data will be modified."
     )
     typer.echo(plan)
-    if not yes and not typer.confirm("\nProceed with this reviewer evaluation?", default=False):
-        typer.echo("Aborted.")
-        raise typer.Exit(code=1)
+    if not yes:
+        confirmation = typer.prompt(
+            "\nProceed with this reviewer evaluation? [y/N]", default="", show_default=False
+        )
+        if confirmation.strip().casefold() not in {"y", "yes"}:
+            typer.echo("Aborted.")
+            raise typer.Exit(code=1)
 
     console.print(f"\nStarting {profile} reviewer evaluation...")
-    instructions = config.INSTRUCTIONS_PATH.read_text(encoding="utf-8")
     try:
         with console.status("Preparing reviewer evaluation...") as status:
             result = reviewer_evaluation.run_evaluation(
                 candidate_reviewer,
                 compare_to,
-                instructions,
                 output_dir,
                 profile=profile,
                 on_status=status.update,

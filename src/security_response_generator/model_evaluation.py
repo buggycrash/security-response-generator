@@ -1098,15 +1098,17 @@ def _create_output_dir(output_root: Path, candidate: str) -> Path:
     return target
 
 
-def prune_evaluation_runs(output_root: Path, keep: int = MAX_EVALUATION_RUNS) -> list[Path]:
+def prune_evaluation_runs(
+    output_root: Path, keep: int = MAX_EVALUATION_RUNS, *, run_marker: str = _RUN_MARKER
+) -> list[Path]:
     """Delete recognized SRG run directories older than the newest ``keep``.
 
     Recognition requires both SRG's timestamped naming pattern and either the
-    run marker used by current versions or a results file written by older
-    versions. Symlinks and unrelated directories are never removed.
+    selected evaluator's run marker or a results file written by older versions.
+    Symlinks and unrelated directories are never removed.
     """
     if keep < 1:
-        raise ValueError("At least one model-evaluation run must be retained.")
+        raise ValueError("At least one evaluation run must be retained.")
     root = output_root.resolve()
     if not root.is_dir():
         return []
@@ -1114,7 +1116,7 @@ def prune_evaluation_runs(output_root: Path, keep: int = MAX_EVALUATION_RUNS) ->
     for path in root.iterdir():
         if path.is_symlink() or not path.is_dir() or not _RUN_DIRECTORY_RE.fullmatch(path.name):
             continue
-        if not (path.joinpath(_RUN_MARKER).is_file() or path.joinpath("results.json").is_file()):
+        if not (path.joinpath(run_marker).is_file() or path.joinpath("results.json").is_file()):
             continue
         resolved = path.resolve()
         if resolved.parent == root:

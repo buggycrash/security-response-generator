@@ -192,13 +192,14 @@ To compare candidates for that role:
 srg evaluate-reviewer <candidate-reviewer>
 ```
 
-Each fixture draft carries exactly one deliberately seeded defect, so every
-check is deterministic and no model grades the reviewer. The run reports
-whether a reviewer finds real defects, whether it leaves good drafts alone,
-and whether it can stay resident alongside the generation and embedding
-models. Restraint matters as much as detection: the generator corrects every
-issue a critique raises, so an invented defect creates a flaw rather than
-merely missing one.
+Each decision gives the reviewer one authoritative requirement sentence and
+one fixed, hand-authored mock generated statement. The model chooses one of
+four relationships: supported, missing required information, contradictory, or
+unsupported. SRG knows the expected answer, so scoring is deterministic and no
+model grades the reviewer. Optional constructive feedback is retained for human
+inspection but never affects the summary. The run reveals which model is best
+at the small, specific comparisons needed by a future statement-level review
+pipeline; it does not audit a complete response or run a revision.
 
 This is a small, experimental, smoke-scale command; see
 [Reviewer evaluation](docs/reviewer-evaluation.md).
