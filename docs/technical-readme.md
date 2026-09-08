@@ -65,6 +65,11 @@ generation model connects the two even when the wording differs.
   non-ASCII characters.
 - A separate validation section with suggested screenshots that an assessor
   could request to substantiate material claims in the draft.
+- Repeatable model comparison for both roles SRG uses a model in:
+  [`srg evaluate-model`](#evaluate-a-generation-model) for generation and
+  [`srg evaluate-reviewer`](#evaluate-a-reviewer-model) for the
+  atomic comparison primitive intended for a future review pipeline. Both run
+  on committed fictional inputs and never touch engagement data.
 
 ## Caveats
 
@@ -460,7 +465,10 @@ Local open-weight model quality is a fast-moving target — new and improved
 releases show up often enough that today's defaults shouldn't be treated as
 permanent. It's worth periodically re-testing both the generation and
 reviewer model choices against your own prompts and hardware as new models
-become available.
+become available. `srg evaluate-model` covers the generation side and
+[`srg evaluate-reviewer`](#evaluate-a-reviewer-model) covers the reviewer
+side; a model that generates well does not necessarily critique well, since
+the two roles reward opposite things.
 
 ## Evaluate a generation model
 
@@ -739,6 +747,110 @@ and 44) per generation model:
   cover slower hardware and larger candidate models without a separate
   hardware caveat.
 
+## Evaluate a reviewer model
+
+`srg evaluate-reviewer` measures the basic decision needed by a future atomic
+review pipeline: can an installed model classify the relationship between one
+generated statement and one authoritative requirement? It is not the grader
+inside `evaluate-model`, and it does not audit a complete control response:
+
+```bash
+srg evaluate-reviewer <candidate-reviewer>
+srg evaluate-reviewer <candidate-reviewer> --compare-to llama3.1:8b
+```
+
+Only `--profile smoke` exists (20 reviewer calls, about 5-15 minutes). A
+larger profile waits until the metrics are shown to separate real models.
+
+### Why it is not `evaluate-model` pointed at a reviewer
+
+`evaluate-model` assigns each result from the reviewer's structured
+observations precisely *because* reviewer verdicts were unreliable
+(see [Standard profile](#standard-profile)). That logic exists to compensate
+for reviewer defects, so reusing it here would measure the compensation. The
+two commands share only model-lifecycle and formatting helpers.
+
+### Why the evaluation is atomic
+
+Realistic multi-source fixtures established that the small local models could
+synthesize plausible responses but could not reliably audit the same dense
+material. The test now isolates the intended primitive. Every call contains one
+requirement sentence and one mock generated sentence, and the requirement is
+the complete factual and scope basis for that decision. No generator
+instructions, analyst input, retrieved source tiers, validations, or surrounding
+paragraphs are included.
+
+Clean paraphrases test restraint. Unsupported implementation and wrong-control
+claims test whether the model rejects information absent from the complete
+grounding basis.
+
+### How it works
+
+Each of the two fictional requirements has five fixed, hand-authored,
+single-claim variants: clean, missing required information, incorrect required
+information, unsupported implementation claim, and wrong-control content. The
+model chooses `supported`, `missing_required_information`,
+`contradicts_requirement`, or `adds_unsupported_information`. The two
+unsupported scenario types share the last classification.
+
+SRG knows the expected answer for every fixture, so **every check is
+deterministic and no model grades the reviewer**. Optional
+`constructive_feedback` is retained in the human worksheet but is never
+interpreted or scored.
+
+The report is intentionally compact:
+
+- **Classification accuracy** — correct and wrong answers side by side, followed
+  by invalid or empty outputs.
+- **Operational profile** — median/maximum response time and JSON size, hidden
+  reasoning, token-ceiling hits, distinctness, and actual simultaneous
+  residency. A coexistence peak is shown only when generation, reviewer, and
+  embedding models were all present; otherwise it reports `FAILED`.
+- **Classification detail** — expected and returned classifications for every
+  scenario and case.
+
+Distinctness near zero means the model emits nearly the same classification
+regardless of the statement. It uses only valid classification values, so
+varied constructive prose cannot improve it. Invalid and empty responses are
+excluded.
+
+Each critique is capped at 3072 tokens. Uncapped, a reviewer that fails to stop
+generates until it exhausts `num_ctx`, at which point Ollama shifts the context
+window and the request never returns — observed with `phi4-mini`, which decoded
+59,000 tokens over nearly 16 minutes on an ordinary draft while sitting fully
+on GPU at full speed. The cap turns that hang into a reported failure. Note
+that `srg generate --review` and `bulk-generate` call the reviewer without a
+ceiling and carry the same exposure.
+
+The ceiling has to allow for hidden reasoning. Ollama bills a thinking model's
+reasoning against `num_predict` but reports only content in `eval_count`, so
+too low a cap makes such a reviewer return *nothing* while the timings look
+normal. Empty responses are therefore invalid rather than restraint, and average
+hidden reasoning is reported beside them as a cost in its own right.
+
+Artifacts land in a timestamped folder under `reviewer_evaluation_runs/`:
+`summary.txt`; `results.json`, the verbatim machine-readable record;
+`critiques.md`, a human-oriented audit trail connecting supplied grounding, the
+mock statement, expected and returned classifications, and optional unscored
+constructive feedback; and `answer-key.md`.
+
+The newest 20 recognized reviewer-evaluation runs are retained. Completed,
+interrupted, and failed run directories count toward that limit; unrelated
+directories are ignored.
+
+### Limits
+
+This measures an atomic classification, not full-response auditing, statement
+decomposition, requirement matching, or what the generator does next. Production
+`srg generate --review` is unchanged and remains the end-to-end check. Prose
+quality, feedback usefulness, and style are deliberately excluded. At smoke
+scale each scenario is a single observation, so repeat comparisons before
+treating a small difference as stable. Suite version 4 is not numerically
+comparable to older reviewer runs.
+
+See [Reviewer evaluation](reviewer-evaluation.md) for the full design brief,
+the defect taxonomy, the scoring mechanics, and the calibration procedure.
+
 ## Keep_alive, temperature, and seed
 
 After each generation request, SRG asks Ollama to keep the generation model
@@ -820,7 +932,9 @@ expected" in [Troubleshooting](#troubleshooting).
   [Choosing a generation model](#choosing-a-generation-model) for tested
   models and results.
 - **Reviewer model**: Gemma4 E2B QAT via Ollama by default, independently
-  swappable through `SRG_REVIEW_MODEL`
+  swappable through `SRG_REVIEW_MODEL`; see
+  [Evaluate a reviewer model](#evaluate-a-reviewer-model) for how to compare
+  candidates
 - **Embedding model**: EmbeddingGemma via Ollama
 - **Vector store**: ChromaDB (embedded/local, no server)
 - **CLI**: [Typer](https://typer.tiangolo.com)
@@ -1027,6 +1141,9 @@ security-response-generator/
 ├── src/security_response_generator/
 │   ├── cli.py                       # update, ingest, engagement, generation, and bulk-generate commands
 │   ├── config.py                    # models, paths, chunking, top-k (env-overridable)
+│   ├── model_evaluation*.py         # generation-model comparison harness
+│   ├── reviewer_evaluation*.py      # reviewer-critique harness and deterministic scoring
+│   ├── evaluation_data/             # frozen fictional evaluation corpora
 │   ├── ingest/                      # loaders, chunking, manifest, Chroma store
 │   ├── generation/                  # retrieval, prompt assembly, ASCII normalizer
 │   └── llm/ollama_client.py         # Ollama embed/chat wrapper
@@ -1051,6 +1168,17 @@ security-response-generator/
   validation rules.
 - **Model pull is slow/fails**: check disk space and network
   connectivity.  Ollama parallelizes model pulls, which quickly runs afoul of default network settings in WSL2 and Windows.
+- **`srg evaluate-reviewer` reports failed model coexistence**: Ollama is
+  evicting one of the generation, reviewer, and embedding models to fit the
+  others, which is the same pressure a real `--review` pass creates. That is a
+  finding about the candidate reviewer's size on your hardware, not a failure
+  of the run. A peak appears only when all three models were actually resident.
+- **`srg evaluate-reviewer` reports classifications you disagree with**: the
+  score is an exact comparison with the frozen expected classification. Read
+  `critiques.md` and, if the answer key is genuinely wrong, fix it in
+  `src/security_response_generator/evaluation_data/reviewer_critique_smoke.json`
+  before trusting a run. See
+  [Reviewer evaluation](reviewer-evaluation.md).
 - **Responses are much slower than expected**: run `ollama ps` to check
   whether the model is fully on GPU or partially spilled to system RAM/CPU
   (Ollama does this automatically and silently if VRAM is tight, and it's a
@@ -1154,6 +1282,19 @@ end-to-end behavior manually after setup:
     completes noninteractively, writes one file per row, the bogus row's file
     contains a "No matching NIST baseline content found" note, and the
     printed summary counts match (clean vs. with notes)
+17. `srg evaluate-reviewer gemma4:e2b-it-qat` — confirm the run completes
+    inside its estimate and every table is populated
+18. Run the same command against a known weak classifier. The metrics must
+    separate it from the default on overall accuracy, clean restraint, or the
+    scenario-level classifications. Compare classification-only distinctness as
+    a secondary collapse diagnostic
+19. Read `critiques.md` from that run end to end — 20 decisions — and compare
+    the supplied grounding, mock statement, expected classification, actual
+    classification, and any optional unscored constructive feedback
+20. On a memory-constrained machine, check `Gen + reviewer + embed`. It must say
+    `FAILED` if any model was absent; otherwise compare its observed peak with
+    available VRAM. Cross-check `load_duration` and residency snapshots in
+    `results.json` for eviction between calls
 
 ## License
 

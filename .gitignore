@@ -32,6 +32,7 @@ engagements/*/responses/
 
 # Generated model-evaluation artifacts (fictional inputs, local model outputs)
 evaluation_runs/
+reviewer_evaluation_runs/
 
 # Env / secrets
 .env

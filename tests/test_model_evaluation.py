@@ -630,7 +630,12 @@ def test_terminal_summary_colors_failures_and_only_offending_timings(monkeypatch
     assert "\x1b[1;38;5;166m76.0s\x1b[0m" in colored
     # Warm timings are summarized as an average and range rather than listed
     # individually; the whole cell is highlighted when the max exceeds the limit.
-    assert "\x1b[1;38;5;166mavg 30.5s (20.0-41.0s, n=2)\x1b[0m" in colored
+    # Check the Text object's style directly because Rich may split one styled
+    # cell into multiple ANSI runs according to terminal capabilities.
+    warm_cell = model_evaluation._warm_timing_cell([41.0, 20.0], 40.0, color=True)
+    assert warm_cell.plain == "avg 30.5s (20.0-41.0s, n=2)"
+    assert warm_cell.style == "bold dark_orange3"
+    assert "\x1b[1;38;5;166mavg 30.5s" in colored
     assert "avg 30.5s (20.0-41.0s, n=2)" in plain
     # comparison's single warm trial (20.0s, under the limit) stays a plain value.
     assert "20.0s" in plain

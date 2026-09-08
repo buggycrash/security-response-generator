@@ -121,16 +121,46 @@ def generate_messages(
     return content
 
 
+def load_model(model: str) -> None:
+    """Make `model` resident without generating anything.
+
+    An empty prompt loads the model and returns immediately, mirroring the
+    zero-keep-alive request `model_evaluation.unload_models` uses to evict one.
+    Reviewer evaluation needs the generation and embedding models genuinely
+    resident to measure whether a candidate reviewer can coexist with them, and
+    summing reported sizes would not capture Ollama's actual behavior.
+
+    ``num_ctx`` matters as much as the weights here: a model loaded at its own
+    default context reserves far less VRAM than the same model loaded at
+    ``NUM_CTX``. Passing it explicitly is what makes the resulting residency
+    figure match what a real generation call would allocate.
+    """
+    _require_local_model(model)
+    _local_client().generate(
+        model=model,
+        prompt="",
+        options={"num_ctx": NUM_CTX},
+        keep_alive=GENERATION_KEEP_ALIVE,
+    )
+
+
 def review_messages(
     messages: list[dict],
     response_format: dict | None = None,
     *,
+    model: str | None = None,
+    seed: int | None = None,
     on_response: Callable[[Mapping], None] | None = None,
     num_predict: int | None = None,
     temperature: float | None = None,
     think: bool | None = None,
 ) -> str:
     """Send a review request to the separately configured local reviewer model.
+
+    ``model`` and ``seed`` override the configured reviewer defaults. Reviewer
+    evaluation uses them so two reviewers can be compared in one process
+    without mutating global configuration or the caller's environment, matching
+    the rationale already documented on ``generate_messages``.
 
     ``think`` is passed straight through to Ollama's ``think`` chat parameter
     when given. Left at its default of ``None``, the reviewer model's own
@@ -140,8 +170,12 @@ def review_messages(
     thinking-capable reviewer model can otherwise exhaust the entire ceiling
     on hidden reasoning and return empty content.
     """
-    _require_local_model(REVIEW_MODEL)
-    options: dict = {"num_ctx": NUM_CTX, "seed": GENERATION_SEED}
+    model = REVIEW_MODEL if model is None else model
+    _require_local_model(model)
+    options: dict = {
+        "num_ctx": NUM_CTX,
+        "seed": GENERATION_SEED if seed is None else seed,
+    }
     if num_predict is not None:
         options["num_predict"] = num_predict
     if temperature is not None:
@@ -152,7 +186,7 @@ def review_messages(
     if think is not None:
         chat_kwargs["think"] = think
     response = _local_client().chat(
-        model=REVIEW_MODEL,
+        model=model,
         messages=messages,
         options=options,
         format=response_format,

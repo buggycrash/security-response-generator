@@ -1,0 +1,67 @@
+{
+  "suite_version": 4,
+  "cases": [
+    {
+      "id": "si5-alert-review-window",
+      "control_id": "SI-5",
+      "grounding_information": "Incoming security alerts must be reviewed within 24 hours of receipt.",
+      "metadata": {
+        "tags": ["atomic-review", "time-parameter"],
+        "description": "One SI-5 requirement tests whether the reviewer preserves a faithful paraphrase, notices an omission or conflict, and rejects standalone unsupported claims."
+      },
+      "drafts": [
+        {
+          "condition": "clean",
+          "mock_generated_draft": "The security team completes its review of each incoming security alert no later than 24 hours after receipt."
+        },
+        {
+          "condition": "missing_required_information",
+          "mock_generated_draft": "The security team completes its review of each incoming security alert after receipt."
+        },
+        {
+          "condition": "incorrect_required_information",
+          "mock_generated_draft": "The security team completes its review of each incoming security alert within 72 hours after receipt."
+        },
+        {
+          "condition": "unsupported_claim",
+          "mock_generated_draft": "An AI service classifies incoming security alerts with ninety-nine percent accuracy."
+        },
+        {
+          "condition": "wrong_control_content",
+          "mock_generated_draft": "Personnel report suspected incidents within one hour of discovery."
+        }
+      ]
+    },
+    {
+      "id": "ra5-critical-remediation-window",
+      "control_id": "RA-5",
+      "grounding_information": "Critical vulnerabilities must be remediated within 15 days of confirmation.",
+      "metadata": {
+        "tags": ["atomic-review", "time-parameter"],
+        "description": "One RA-5 requirement repeats the same five decisions with different vocabulary so a model cannot succeed by keying on a single phrase."
+      },
+      "drafts": [
+        {
+          "condition": "clean",
+          "mock_generated_draft": "The organization completes remediation of each critical vulnerability no later than 15 days after confirmation."
+        },
+        {
+          "condition": "missing_required_information",
+          "mock_generated_draft": "The organization completes remediation of each critical vulnerability after confirmation."
+        },
+        {
+          "condition": "incorrect_required_information",
+          "mock_generated_draft": "The organization completes remediation of each critical vulnerability within 45 days after confirmation."
+        },
+        {
+          "condition": "unsupported_claim",
+          "mock_generated_draft": "Automated scanning verifies 100 percent asset coverage."
+        },
+        {
+          "condition": "wrong_control_content",
+          "mock_generated_draft": "The organization conducts a formal risk assessment every year."
+        }
+      ]
+    }
+  ]
+}

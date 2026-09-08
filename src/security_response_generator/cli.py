@@ -20,6 +20,7 @@ from security_response_generator import (
     model_evaluation,
     model_evaluation_sampling,
     model_evaluation_stats,
+    reviewer_evaluation,
 )
 from security_response_generator.generation import bulk_csv
 from security_response_generator.generation.formatting import normalize_to_ascii
@@ -840,6 +841,135 @@ def evaluate_model_command(
             sampling_manifest=standard_sampling_manifest,
         )
     )
+
+
+@app.command("evaluate-reviewer")
+def evaluate_reviewer_command(
+    candidate_reviewer: str = typer.Argument(
+        ..., help="Installed local model to evaluate as SRG's review/revision reviewer."
+    ),
+    compare_to: str = typer.Option(
+        config.REVIEW_MODEL,
+        "--compare-to",
+        help="Comparison reviewer (default: SRG's configured reviewer model).",
+    ),
+    profile: str = typer.Option(
+        reviewer_evaluation.DEFAULT_PROFILE,
+        "--profile",
+        help="Evaluation profile. Only 'smoke' is available while the metrics are uncalibrated.",
+    ),
+    output_dir: Path = typer.Option(
+        config.REVIEWER_EVALUATION_DIR,
+        "--output-dir",
+        help="Parent directory for the timestamped evaluation artifact folder.",
+    ),
+    yes: bool = typer.Option(
+        False,
+        "--yes",
+        "-y",
+        help="Accept the displayed evaluation plan without an interactive confirmation.",
+    ),
+) -> None:
+    """Measure a model's one-requirement, one-statement review decisions.
+
+    Each decision contains one authoritative requirement and one mock generated
+    statement carrying at most one deliberately seeded defect. The right answer
+    is known by construction and every check is deterministic -- no model grades
+    the reviewer. This does not audit or revise a complete generated response.
+    """
+    if profile not in reviewer_evaluation.PROFILES:
+        typer.echo(
+            "Only '--profile smoke' is currently available; the metrics are not yet "
+            "calibrated enough to justify a larger run.",
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+    typer.echo("\nSRG reviewer-model evaluation\n")
+    try:
+        with console.status("Checking evaluation prerequisites..."):
+            reviewer_evaluation.validate_preflight(
+                candidate_reviewer, compare_to, output_dir, profile=profile
+            )
+    except _SYSTEMIC_ERRORS as exc:
+        typer.echo(f"Reviewer evaluation preflight failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    reviewer_profile = reviewer_evaluation.PROFILES[profile]
+    cases = reviewer_profile.load_cases()
+    items = reviewer_profile.item_count(cases)
+    comparison_label = (
+        "SRG configured reviewer"
+        if reviewer_evaluation.normalize_model_name(compare_to)
+        == reviewer_evaluation.normalize_model_name(config.REVIEW_MODEL)
+        else "explicit override"
+    )
+    conditions = ", ".join(reviewer_evaluation.CONDITIONS)
+    plan = (
+        f"Candidate reviewer:  {candidate_reviewer}\n"
+        f"Comparison reviewer: {compare_to} ({comparison_label})\n"
+        "Profile:             SMOKE - development feedback, not qualification evidence\n"
+        "Role measured:       Atomic requirement/statement review, not full-response critique\n"
+        f"Cases:               {len(cases)} fictional atomic requirements\n"
+        f"Statement conditions:{' ' if conditions else ''} {conditions}\n"
+        f"Reviewer calls:      {items * 2} total ({items} per reviewer)\n"
+        "Scoring:             Fully deterministic; no model grades the reviewer\n"
+        "Classification:      supported, missing, contradicts, or adds unsupported info\n"
+        "Accuracy:            Only an exact match to the frozen classification is scored\n"
+        "Feedback:            Optional constructive feedback is retained but never scored\n"
+        "Style:               Prose quality and stylistic preferences are not judged\n"
+        "Distinctness:        Repeated classifications are shown as a secondary diagnostic\n"
+        f"Memory:              {config.GENERATION_MODEL} and {config.EMBEDDING_MODEL} are "
+        "loaded but\n"
+        "                     never prompted, so reviewer coexistence is measured under "
+        "real pressure\n"
+        "Not measured:        Whether the generator actually improves after the critique; "
+        "use\n"
+        "                     `srg generate --review` for that end-to-end check\n"
+        f"Estimated time:      {reviewer_profile.estimate}\n"
+        f"Artifacts:           timestamped folder under {output_dir}\n"
+        f"Retention:           newest {reviewer_evaluation.MAX_REVIEWER_EVALUATION_RUNS} "
+        "recognized runs kept\n"
+        "Customer data:       No active engagement data will be used\n\n"
+        "Environment:         Settings are not modified\n\n"
+        "Reviewer input:      One requirement sentence and one fixed mock generated\n"
+        "                     sentence per decision; no analyst or engagement context\n\n"
+        "The candidate and comparison reviewers must be different models. Apart from that,\n"
+        "the candidate may be any installed local model, including SRG's configured\n"
+        "generation model. After confirmation the run is fully noninteractive. No source\n"
+        "documents, indexes, or engagement data will be modified."
+    )
+    typer.echo(plan)
+    if not yes:
+        confirmation = typer.prompt(
+            "\nProceed with this reviewer evaluation? [y/N]", default="", show_default=False
+        )
+        if confirmation.strip().casefold() not in {"y", "yes"}:
+            typer.echo("Aborted.")
+            raise typer.Exit(code=1)
+
+    console.print(f"\nStarting {profile} reviewer evaluation...")
+    try:
+        with console.status("Preparing reviewer evaluation...") as status:
+            result = reviewer_evaluation.run_evaluation(
+                candidate_reviewer,
+                compare_to,
+                output_dir,
+                profile=profile,
+                on_status=status.update,
+            )
+    except reviewer_evaluation.ReviewerEvaluationInterrupted as exc:
+        typer.echo("Reviewer evaluation interrupted; completed work was preserved.", err=True)
+        typer.echo(f"Partial artifacts: {exc.output_dir.resolve()}", err=True)
+        if exc.artifact_error:
+            typer.echo(f"Artifact warning: {exc.artifact_error}", err=True)
+        raise typer.Exit(code=130) from exc
+    except _SYSTEMIC_ERRORS as exc:
+        typer.echo(f"Reviewer evaluation aborted: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo()
+    typer.echo(reviewer_evaluation.render_summary(result, color=console.color_system is not None))
 
 
 @app.command("benchmark")

@@ -33,6 +33,7 @@ NIST_CATALOG_PATH = KNOWLEDGE_BASE_DIR / "NIST.SP.800-53-oscal.md"
 ENGAGEMENTS_DIR = PROJECT_ROOT / "engagements"
 ACTIVE_ENGAGEMENT_PATH = PROJECT_ROOT / ".srg" / "active-engagement"
 MODEL_EVALUATION_DIR = PROJECT_ROOT / "evaluation_runs"
+REVIEWER_EVALUATION_DIR = PROJECT_ROOT / "reviewer_evaluation_runs"
 
 INSTRUCTIONS_PATH = PROJECT_ROOT / "prompts" / "instructions.md"
 CHAT_INSTRUCTIONS_PATH = PROJECT_ROOT / "prompts" / "chat_instructions.md"
