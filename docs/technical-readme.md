@@ -84,12 +84,10 @@ generation model connects the two even when the wording differs.
   very different AI usage policies.
 - Python 3.11+
 - [Ollama](https://ollama.com/download) installed, with the daemon running
-- Ubuntu 22.04 is the only tested operating system. Native Windows is not
-  supported; WSL2 is supported. macOS may be compatible but has not yet been
-  tested.
+- Ubuntu 22.04 and MacOS Tahoe are th eonly operating systems tested.  
 - A modest amount of VRAM or unified memory for `gemma4:e4b-it-qat`
   (approximately 6.1 GB to download and under 4 GB of VRAM once loaded
-  alongside `embeddinggemma`) — it fits comfortably on an 8 GB card. See
+  alongside `embeddinggemma`) — it fits comfortably on an 8 GB card or within 16GB of unified memory. See
   [Choosing a generation model](#choosing-a-generation-model) for other
   tested options. SRG does not currently have a recommended generation
   model smaller than `gemma4:e4b-it-qat`.
@@ -383,57 +381,18 @@ it does not remove the need for grounded inputs or human review of the draft.
 
 ## Choosing a generation model
 
-> [!WARNING]
-> Model weights are not included in this source repository and are not
-> covered by its MIT License. Running `./setup.sh` without `--skip-models`
-> downloads them into Ollama's local model storage, where they become
-> separately licensed runtime components of the installed project. The
-> default generation and reviewer models are governed by the
-> [Apache License 2.0](https://www.apache.org/licenses/LICENSE-2.0); the
-> default embedding model is governed by the
-> [Gemma Terms of Use](https://ai.google.dev/gemma/terms). See
-> [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md).
-
 The default, `gemma4:e4b-it-qat`, was selected after direct comparisons on
 SRG's retrieval and generation workload against every other model in the
 table at [Examples of SRG model use](Examples-of-SRG-use.md) — it produced the best output quality and alignment of any
 locally-viable option tested, in a quantized footprint that fits comfortably
-alongside `embeddinggemma`. It remains a compromise, though: on complex
+alongside `embeddinggemma` and the default reviewer model in `--review` or bulk mode. It remains a compromise, though: on complex
 controls it may still omit or misunderstand relevant context even when
 retrieval supplied the correct material. Every generated response is
 therefore a draft requiring human review.
 
-`gemma4:e4b-it-qat` is a quantization-aware-trained (QAT) build of Google's
-Gemma 4 E4B, part of a multimodal model family that still carries unused
-vision/audio encoders this tool never exercises. QAT quantization is what
-brings its resident footprint down to well under 7 GB, letting it coexist
-with `embeddinggemma` on an 8 GB card without the evict-and-reload cycling
-that tighter-fitting models can trigger on every `srg generate` call. See
-"Responses are much slower than expected" in
-[Troubleshooting](#troubleshooting) for symptoms and mitigations.
-
-**[Phi-4-mini](https://ollama.com/library/phi4-mini)** (Microsoft) was tested
-because its approximately 3.8B parameters and 2.5 GB download make it
-attractive for constrained hardware. It is not sufficient for SRG's
-generation workload and should not be used for control responses. Across
-repeated identical prompts, it produced inconsistent output, omitted explicit
-analyst context, drifted from the requested control, and generated validation
-suggestions unrelated to its claims. Those are model-capability failures, not
-retrieval failures. `gemma4:e4b-it-qat` is the minimum recommended local
-generation model; if your hardware cannot run it, SRG does not currently
-offer a suitable smaller fallback.
-
-The plain **[Gemma 4 E4B](https://ollama.com/library/gemma4)** (non-QAT) tag
-was also tested and produced very good alignment and prose — but at roughly
-9.6 GB, its footprint sits at the edge of what's available on a 12 GB card
-alongside `embeddinggemma`, making it prone to VRAM-eviction cycling in
-testing. The QAT build now used as the default achieves essentially the same
-quality for meaningfully less VRAM, so the plain tag isn't recommended over
-it.
-
 See [Examples of SRG model use](Examples-of-SRG-use.md) for  side-by-side
 outputs from the default model and considered alternatives using identical
-prompts.
+prompts.  Visit https://modelfit.io/ to see what models may work well with your hardware. Note that [BBEH](https://github.com/google-deepmind/bbeh) is the most appropriate benchmark for this application, not coding benchmarks. 
 
 Switch models with the `SRG_GEN_MODEL` environment variable — no code
 changes needed, since `srg` talks to Ollama's generic chat API regardless
@@ -459,14 +418,14 @@ SRG_REVIEW_MODEL=llama3.1:8b srg generate SI-5 --context "..."
 
 The embedding model (`embeddinggemma`) is a separate, much smaller model
 used only for retrieval, and typically doesn't need to change when you swap
-the generation model.  Other embedding models exists, but none were tested.  
+the generation model.  Other embedding models exist, but none were tested because this one meets all the requirements.  
 
 Local open-weight model quality is a fast-moving target — new and improved
 releases show up often enough that today's defaults shouldn't be treated as
 permanent. It's worth periodically re-testing both the generation and
 reviewer model choices against your own prompts and hardware as new models
 become available. `srg evaluate-model` covers the generation side and
-[`srg evaluate-reviewer`](#evaluate-a-reviewer-model) covers the reviewer
+`srg evaluate-reviewer` covers the reviewer
 side; a model that generates well does not necessarily critique well, since
 the two roles reward opposite things.
 
@@ -508,150 +467,7 @@ accepts the displayed plan for unattended use.
 
 Pass `--profile smoke` for a much smaller, faster run (three tasks, ten
 responses) intended for rapid development feedback on the evaluation harness
-itself, not for qualification evidence. The remainder of this section
-describes the smoke profile's mechanics in detail; the standard profile
-reuses every one of them (see [Standard profile](#standard-profile) for what
-changes at the larger scale). The smoke profile behaves exactly as described
-here:
-
-- The candidate and comparison model each generate five responses: three SI-5
-  trials using seeds 42, 43, and 44, one AC-2 trial, and one SC-8(1) trial.
-- The first SI-5 request is measured from a verified unloaded generation model;
-  the next two are measured warm. A performance pass requires the cold request
-  to finish in under 75 seconds and both warm requests in under 40 seconds.
-- After every generation, SRG samples Ollama's running-model process table once
-  for both the generation and embedding models. The report shows average and
-  peak generation-model allocation, average GPU allocation, average combined
-  allocation with `embeddinggemma`, and whether the generation model was fully
-  GPU-resident at every sample. Model allocations over 7 GiB and incomplete GPU
-  residency are highlighted in deep orange. These are Ollama-reported loaded
-  allocations, not operating-system process RSS measurements.
-- Ollama process-table queries can occasionally take several seconds. Sampling
-  after generation occurs outside the measured interval; the pre-generation
-  residency check needed for ejection detection is timed separately and removed
-  from the reported generation duration. Poll durations and every raw residency
-  sample remain available in `results.json`.
-- `embeddinggemma` is warmed before each model's run and a real query embedding
-  occurs inside each timed trial. The candidate and embedding model must remain
-  resident together. Grounding chunks are frozen fictional fixtures, rather
-  than live retrieval results, so both generation models receive identical
-  evidence and no active customer engagement is read.
-- SRG checks residency after embedding and after every generation. If Ollama
-  ejects a required generation or embedding model, the evaluation stops,
-  preserves completed work as a failed partial run, and attempts to unload the
-  evaluation models. The ejected model and checkpoint are recorded in
-  `ERROR.txt`.
-- AC-2 tests explicit handling of a negative analyst fact without declaring the
-  control inapplicable. SC-8(1) tests exact-enhancement scope and unsupported
-  invention. SI-5 tests customer-standard precedence, analyst-context use, and
-  consistency across seeds.
-- Case-specific expectations come only from the analyst context, customer
-  standard, control text, and private context. A shared process rubric tells the
-  grader how to evaluate source coverage, precedence, scope, unsupported detail,
-  and validation suggestions; it does not restate benchmark-specific facts or
-  prescribe the answer. Validation entries are evaluated as suggested evidence,
-  not proof that implementation has occurred.
-- The configured local reviewer model evaluates each blinded response in
-  isolation using two calls after generation. A narrow analyst-inclusion call
-  receives only the exact analyst context and narrative—never validations or
-  other chunks—and returns an inclusion decision with a short verbatim narrative
-  quote. SRG verifies that a positive quote actually occurs in the narrative; an
-  unverifiable result cannot remain `viable`. This narrow call uses temperature
-  zero and a 128-token output ceiling so a reviewer that ignores the requested
-  short format cannot generate indefinitely; malformed or truncated output is
-  recorded as `unverified` and the evaluation continues. SRG explicitly disables
-  thinking for this call, since Ollama counts a thinking-capable reviewer
-  model's hidden reasoning tokens against the same 128-token ceiling, which
-  could otherwise exhaust the budget before any JSON content is emitted. A separate assessment call receives
-  the customer standard, private context, NIST baseline, rubric, narrative, and
-  validations, but not the analyst context or opposing response. This prevents
-  source leakage and relative contrast while keeping each prompt bounded as
-  profiles add rounds. Every call supplies its complete input and receives no
-  previous grade, evaluation history, or cached result. The reviewer is fixed evaluation
-  infrastructure for this
-  command; SRG's review/revision pipeline is disabled and no candidate response
-  is revised. A generation model under test cannot also be the grader. The
-  analyst precheck is authoritative for analyst-context inclusion. Analyst
-  context counts as included when its recognizable,
-  analyst-specific substance appears accurately and relevantly in the narrative,
-  even when paraphrased or insufficient to satisfy other requirements. It is
-  missing only when that substance is absent from the narrative; validations and
-  generic control language cannot substitute for it. The NIST baseline informs
-  overall requirement coverage but not these source classifications.
-  The reviewer model's own overall `assessment` is **recorded but never
-  used**, on both profiles: SRG assigns the category itself from the reviewer's
-  structured observations and the checks SRG owns outright, keeping the
-  reviewer's verdict as `reviewer_assessment` and flagging any
-  `reviewer_divergence` for human review. This replaced an earlier policy that
-  started from the reviewer's verdict and only ever escalated it, which made an
-  over-harsh `not_viable` impossible to walk back even when every structured
-  observation in the same reply was clean. SRG then
-  applies the severity rules deterministically: missing analyst context is
-  `not_viable`; when customer chunks exist, no customer-standard coverage is
-  `not_viable` and partial coverage requires `material_edits`; missing or partial
-  coverage of supplied, relevant, non-conflicting private context requires
-  `material_edits` but cannot alone make a response `not_viable`. Empty customer
-  or private inputs are recorded as `not_provided` and carry no coverage penalty.
-  Scope guidance defines `focused`, `minor_drift`, and `material_drift`
-  separately. The grader may report material drift only when its issues identify
-  specific offending content and explain the unrelated control or topic;
-  supplied architecture that directly explains the requested implementation is
-  considered focused.
-  It does not reward true but irrelevant detail: substantial wrong-control
-  content limits a response to `material_edits`. Source material counts only
-  when correctly stated in the narrative rather than its validation suggestions.
-- SRG independently counts explicit `[PLACEHOLDER: ...]` markers in every
-  generation. One placeholder prevents a `viable` result; two or more make the
-  response `not_viable`. Whether SRG needed its automatic forced-completion call
-  is recorded but does not by itself change viability. A coverage-and-completeness
-  table lists analyst, customer, and private coverage alongside placeholder counts
-  and forced completions before the human-review priorities, while
-  `grader-findings.md` retains the same per-trial evidence and any deterministic
-  adjustment.
-- SRG also counts validation headings left inside the implementation
-  narrative. Validations belong only in the rendered `[Validations]` section,
-  and any heading-like occurrence in the prose (`**Validations**:`,
-  `Validations:`, `## Validations`) makes the response `not_viable` in both
-  profiles. This is a structural defect rather than a judgment call: the
-  analyst reads the narrative first and frequently pastes it straight into a
-  system of record, so embedded evidence suggestions mislead them and the
-  assessor later. It also measurably distorts automated grading — the reviewer
-  model counts that validation text as narrative coverage of a requirement the
-  prose never actually stated. Ordinary prose about validation is not counted,
-  since information input validation is itself a control topic (SI-10). SRG's
-  renderer already strips a duplicate trailing `[Validations]` block out of the
-  prose; this check catches the shapes that survive that cleanup.
-- SRG aggregates the independent trial findings by case for the terminal
-  summary. A case is `viable` only when every trial is viable; any
-  `not_viable` or `material_edits` finding carries into the case result.
-  Automated model preference first favors the model with **fewer `not_viable`
-  trials**, then more `viable`, then fewer `inconclusive` and `material_edits`
-  trials. An unusable draft is the outcome worth avoiding for this workload:
-  an analyst can edit a flawed draft, but cannot use one that omits their
-  context or the customer standard. (An earlier version led with the viable
-  count, which let a single good trial outrank any number of unusable ones —
-  a model that failed two of three trials was reported as preferred over one
-  that merely needed edits on all three.) Equal
-  distributions produce a tie; the grader is never asked for a relative model
-  preference. The summary calls out model and trial combinations that need
-  human attention, while `grader-findings.md` retains every individual trial
-  judgment. Adding rounds therefore does not make the main result table grow
-  linearly.
-- Automated review evaluates requirement coverage, grounding, scope, and likely
-  defects. It does not score prose quality, writing style, clarity, or how
-  pleasant a response is to read. Models with equivalent automated results can
-  therefore produce materially different prose; the blinded human review is
-  the place to compare those qualities, and larger profiles may reasonably use
-  human spot checks rather than exhaustive reading.
-
-The run normally uses ten response trials and twenty independent grader calls: one
-analyst-inclusion check and one broader assessment for each response. After the initial
-confirmation, it is fully noninteractive. If a model asks for missing
-information, SRG automatically makes one final generation call requiring a
-placeholder-annotated response based only on the supplied fictional context.
-Expect approximately 10-18 minutes on the reference-class hardware described
-above. Models larger than SRG's default—or mixture-of-experts (MoE) models—may
-take much longer on typical workstations.
+itself, not for qualification evidence. 
 
 Pressing Ctrl-C safely stops an evaluation. SRG preserves every completed trial,
 records the unfinished operation in `results.json`, writes `INTERRUPTED.txt`,
@@ -676,76 +492,8 @@ evaluation run directories under the selected output parent and permanently
 removes older runs after each completed or partially completed evaluation.
 Unrelated folders and symlinks in that parent are not removed.
 
-Every smoke report is labeled `SMOKE EVALUATION - NOT A MODEL-QUALIFICATION
-RESULT`. Automated grading is advisory in both profiles. Reviewer-model
+Automated grading is advisory in both profiles. Reviewer-model
 qualification remains future work and will require a different suite.
-
-### Standard profile
-
-```bash
-srg evaluate-model llama3.1:8b --profile standard
-```
-
-The standard profile reuses every mechanism above (the same two-call grading
-architecture, deterministic policy, model lifecycle, ejection handling,
-interruption handling, and 20-run retention pool shared with smoke) and scales
-it to ten versioned fictional tasks, each run with three fixed seeds (42, 43,
-and 44) per generation model:
-
-```text
-10 tasks x 3 seeds x 2 generation models = 60 responses
-60 responses x 2 independent grader calls = 120 grader calls
-```
-
-- Cold/warm timing generalizes from smoke's per-case phase list to one rule:
-  the first request generated in each model's 30-trial block is measured
-  cold, and every other trial in that block is warm and feeds the
-  performance table. This yields per-task seed-consistency evidence across
-  all ten tasks instead of only SI-5. The terminal performance table shows an
-  average and range for the warm trials (e.g. "avg 11.0s (8.2-14.0s, n=29)")
-  rather than listing all 29 individual timings; every raw per-trial value is
-  still recorded in `results.json` for anyone who wants it.
-- The run records `model_block_order` (which generation model's block ran
-  first) in `results.json`, raw data for a future calibration study on
-  counterbalancing; this release does not counterbalance automatically.
-- Terminal output stays compact: the same performance and memory tables as
-  smoke, ten per-task aggregate rows (not sixty per-trial rows) in the
-  automated independent review table, a macro-averaged quality table (each of
-  the ten tasks weighted equally, so one systematically failed task cannot be
-  hidden by three easy ones), and a head-to-head results table naming each
-  model directly (e.g. "phi4-mini:latest won 2 of 30 trials"), followed by a
-  plain-language likely-range sentence derived from a stdlib-only bootstrap
-  over the win-rate proportion (not the raw win/loss/tie score, which is on a
-  different scale). These paired outcomes are descriptive evidence only,
-  explicitly not proof of model quality or a qualification decision.
-  Hard-failure counts (analyst-context omission, total customer-source
-  omission, repeated placeholders) are not shown as a separate terminal
-  table — that detail is already visible per task in the automated
-  independent review table and remains fully available in `results.json` and
-  `stats.json`.
-- Human review is treated as a small spot check, not an exhaustive audit: the
-  terminal "Human review priorities" table and the `human-review.md`
-  worksheet are both capped at 5 response pairs, since nobody reads 60 (or
-  even 20) documents. Pairs where the two models disagreed, or where either
-  response was flagged (`not_viable`, missing/unverified analyst context, or
-  a contradictory deterministic-policy adjustment), are selected first and
-  spread across as many different tasks as possible; if fewer than 5 pairs
-  are flagged, the rest are filled with a deterministic random spot check
-  (seeded locally, so it never disturbs Python's global random state). Every
-  pair's selection reason is shown in plain language (e.g. "Models
-  disagreed"). `human-review-sampling.md` records the full manifest,
-  including every excluded pair, for transparency; `answer-key.md` still
-  covers every task.
-- Every report is labeled `STANDARD EVALUATION - ADVISORY, NOT AUTOMATIC
-  QUALIFICATION`. This first implementation reports evidence only: it does
-  not yet apply calibrated pass/fail qualification gates, and it never
-  changes SRG's shipped default. A candidate becoming "eligible for human
-  consideration" is a distinct, future, calibration-driven decision from
-  "approved as SRG's new default," which remains solely the repository
-  owner's call.
-- Expect approximately 30-120 minutes; the range is intentionally wide to
-  cover slower hardware and larger candidate models without a separate
-  hardware caveat.
 
 ## Evaluate a reviewer model
 
@@ -762,82 +510,6 @@ srg evaluate-reviewer <candidate-reviewer> --compare-to llama3.1:8b
 Only `--profile smoke` exists (20 reviewer calls, about 5-15 minutes). A
 larger profile waits until the metrics are shown to separate real models.
 
-### Why it is not `evaluate-model` pointed at a reviewer
-
-`evaluate-model` assigns each result from the reviewer's structured
-observations precisely *because* reviewer verdicts were unreliable
-(see [Standard profile](#standard-profile)). That logic exists to compensate
-for reviewer defects, so reusing it here would measure the compensation. The
-two commands share only model-lifecycle and formatting helpers.
-
-### Why the evaluation is atomic
-
-Realistic multi-source fixtures established that the small local models could
-synthesize plausible responses but could not reliably audit the same dense
-material. The test now isolates the intended primitive. Every call contains one
-requirement sentence and one mock generated sentence, and the requirement is
-the complete factual and scope basis for that decision. No generator
-instructions, analyst input, retrieved source tiers, validations, or surrounding
-paragraphs are included.
-
-Clean paraphrases test restraint. Unsupported implementation and wrong-control
-claims test whether the model rejects information absent from the complete
-grounding basis.
-
-### How it works
-
-Each of the two fictional requirements has five fixed, hand-authored,
-single-claim variants: clean, missing required information, incorrect required
-information, unsupported implementation claim, and wrong-control content. The
-model chooses `supported`, `missing_required_information`,
-`contradicts_requirement`, or `adds_unsupported_information`. The two
-unsupported scenario types share the last classification.
-
-SRG knows the expected answer for every fixture, so **every check is
-deterministic and no model grades the reviewer**. Optional
-`constructive_feedback` is retained in the human worksheet but is never
-interpreted or scored.
-
-The report is intentionally compact:
-
-- **Classification accuracy** — correct and wrong answers side by side, followed
-  by invalid or empty outputs.
-- **Operational profile** — median/maximum response time and JSON size, hidden
-  reasoning, token-ceiling hits, distinctness, and actual simultaneous
-  residency. A coexistence peak is shown only when generation, reviewer, and
-  embedding models were all present; otherwise it reports `FAILED`.
-- **Classification detail** — expected and returned classifications for every
-  scenario and case.
-
-Distinctness near zero means the model emits nearly the same classification
-regardless of the statement. It uses only valid classification values, so
-varied constructive prose cannot improve it. Invalid and empty responses are
-excluded.
-
-Each critique is capped at 3072 tokens. Uncapped, a reviewer that fails to stop
-generates until it exhausts `num_ctx`, at which point Ollama shifts the context
-window and the request never returns — observed with `phi4-mini`, which decoded
-59,000 tokens over nearly 16 minutes on an ordinary draft while sitting fully
-on GPU at full speed. The cap turns that hang into a reported failure. Note
-that `srg generate --review` and `bulk-generate` call the reviewer without a
-ceiling and carry the same exposure.
-
-The ceiling has to allow for hidden reasoning. Ollama bills a thinking model's
-reasoning against `num_predict` but reports only content in `eval_count`, so
-too low a cap makes such a reviewer return *nothing* while the timings look
-normal. Empty responses are therefore invalid rather than restraint, and average
-hidden reasoning is reported beside them as a cost in its own right.
-
-Artifacts land in a timestamped folder under `reviewer_evaluation_runs/`:
-`summary.txt`; `results.json`, the verbatim machine-readable record;
-`critiques.md`, a human-oriented audit trail connecting supplied grounding, the
-mock statement, expected and returned classifications, and optional unscored
-constructive feedback; and `answer-key.md`.
-
-The newest 20 recognized reviewer-evaluation runs are retained. Completed,
-interrupted, and failed run directories count toward that limit; unrelated
-directories are ignored.
-
 ### Limits
 
 This measures an atomic classification, not full-response auditing, statement
@@ -847,9 +519,6 @@ quality, feedback usefulness, and style are deliberately excluded. At smoke
 scale each scenario is a single observation, so repeat comparisons before
 treating a small difference as stable. Suite version 4 is not numerically
 comparable to older reviewer runs.
-
-See [Reviewer evaluation](reviewer-evaluation.md) for the full design brief,
-the defect taxonomy, the scoring mechanics, and the calibration procedure.
 
 ## Keep_alive, temperature, and seed
 
@@ -928,7 +597,7 @@ expected" in [Troubleshooting](#troubleshooting).
   (QAT)](https://ollama.com/library/gemma4) via [Ollama](https://ollama.com)
   by default — the best output quality of any locally-viable option tested,
   in a quantized footprint that fits comfortably in 8 GB of VRAM alongside
-  the embedding model. It is swappable through `SRG_GEN_MODEL`; see
+  the embedding and reviewer models. It is swappable through `SRG_GEN_MODEL`; see
   [Choosing a generation model](#choosing-a-generation-model) for tested
   models and results.
 - **Reviewer model**: Gemma4 E2B QAT via Ollama by default, independently
@@ -1049,8 +718,7 @@ ruled it out.
   mode smaller dense models are particularly prone to — it would likely make
   responses worse, not better.
 
-Retrieval keeps each request small (a bounded top-k slice per tier, sized in
-`config.py`) precisely because both source corpora — the shared NIST
+Retrieval keeps each request small precisely because both source corpora — the shared NIST
 baseline, and for larger jurisdictions the customer-standards material
 itself — can each individually exceed what any locally-run model's context
 window can hold.
@@ -1154,7 +822,7 @@ security-response-generator/
 
 - **`ollama: command not found`**: install it from the
   [Ollama download page](https://ollama.com/download).
-- **Ollama daemon not running**: the `srg` launcher normally starts it
+- **Ollama daemon not running**: the `srg` launcher (`./setup.sh`) normally starts it
   automatically. If startup fails, review `/tmp/srg-ollama-serve.log` (or
   `$TMPDIR/srg-ollama-serve.log` when `TMPDIR` is set).
 - **Installation seems incomplete**: run `./setup.sh --check` for individual

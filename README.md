@@ -17,6 +17,16 @@ control responses.
 After an hour or two of initial setup, that team member with SRG can produce a draft
 response in minutes. SRG maps the prose to the applicable NIST requirements *and* customer-specific parameters (password length, audit review frequency, etc.), using concrete system details supplied either in reusable private context files or with the individual request. The result is a faster drafting process with grounded requirement coverage. Additionally, SRG provides consistent tone and style over time regardless of which engineer requests the response generation, reducing cognitive load on both the writers, and the assessors.
 
+Example use:
+
+`srg generate SI-5 --context "CISA alerts are received by the State SOC and forwarded to all system owners via internal controlled channels."`
+
+![](docs/images/image1.png)
+
+### A note about Trust
+
+The entire compliance realm is built on trust.  Human to human trust.  Conversations between humans define the scope and the processes used to provide, but also validate that trust.  This tool does not, and in fact cannot replace or subvert that trust.  What it can do is improve speed and consistency in a realm where a reasonable degree of trust has already been established.
+
 ---
 
 Security Response Generator (`srg`) is a local CLI that drafts NIST SP
@@ -33,17 +43,16 @@ Security Response Generator (`srg`) is a local CLI that drafts NIST SP
 - Python 3.11 or newer
 - [Ollama](https://ollama.com/download)
 - Enough local memory for the default generation, reviewer, and embedding
-  models (Ollama may unload models between pipeline stages on constrained systems).  In practice, the default models need about 8GB of VRAM total.
+  models.  In practice, the default models need about 8GB of VRAM or available unified memory total.
 
 ## Supported platforms
 
 SRG has been tested in Windows WSL2 Ubuntu 22.04 with 8GB of RAM and passthrough to 12GB VRAM, and on an Apple Silicon M1 MacBook
 Pro with 16GB of unified memory running macOS Tahoe.  
 
-Consider 8GB of dedicated VRAM or 16 GB of unified RAM as the minimum requirements   
+Consider 8GB of dedicated VRAM or 16GB of unified memory as the minimum requirements
 
-It is not compatible with native
-Windows.
+SRG is not compatible with native Windows.
 
 ## Security and privacy
 
@@ -72,7 +81,7 @@ The initial engagement is `DEMO` (see below for what an engagement is). It inclu
 
 - The project-level NIST SP 800-53 Release 5.2.0 catalog
 - Fictional private context for `DEMO-ECMS`
-- Fictional, and sometimes intentionally outrageous, customer-specific standards
+- Fictional, and sometimes intentionally _outrageous_, customer-specific standards
 
 Ingest the source material:
 
@@ -88,11 +97,22 @@ Generate an SI-5 response:
 srg generate SI-5 --context "CISA alerts are received by the State SOC and forwarded to all system owners via internal controlled channels."
 ```
 
-![](docs/images/image7.png)
+![](docs/images/image1.png)
 
 The response begins with `Customer: DEMO` to be clear this is for demonstration purposes.  
-Response is not immediate, but takes less than 40 seconds on the tested platforms.
+Response is not immediate, but takes less than 40 seconds on the tested platforms.  Compare that to the time it would take a human mentally combining the NIST guidance, customer guidance, and system technical details into the initial cohesive security control response draft.  Personal experience is that these automated responses are about 70% of the way there, and most importantly create a useful structure that can then be refined as needed to meet assessor requirements.
 
+## Chat
+
+Because the engineer may know their system, but not the security controls, SRG provides
+the ability to ask about the controls, and if available, the customer standards.  
+
+```bash
+srg chat "How often do we need to audit logins?"
+```
+![](docs/images/image8.png)
+
+Chatting can be very useful when the user is still learning the customer standards, or the customer provides standards AND policy that both need to be considered when generating a response.
 
 ## Create a customer engagement
 
@@ -147,63 +167,6 @@ Plain-text output retains normal capitalization while removing Markdown,
 Unicode punctuation, and other non-ASCII characters that cannot be imported to 
 some dedicated governance and compliance systems such as Xacta, Archer, ServiceNow CAM, or eMASS.
 
-## Chat
-
-Because the engineer may know their system, but not the security controls, SRG provides
-the ability to ask about the controls, and if available, the customer standards.  
-
-```bash
-srg chat "How often do we need to audit logins?"
-```
-![](docs/images/image8.png)
-
-Chatting can be very useful when the user is still learning the customer standards, or the customer provides standards AND policy that both need to be considered when generating a response.
-
-## Evaluate a candidate generation model
-
-Run a repeatable, task-balanced comparison between an installed candidate
-model and SRG's shipped generation model:
-
-```bash
-srg evaluate-model <candidate-model>
-```
-
-The command first shows the fictional test cases, model-call count, estimated
-30-120 minute duration, and artifact location, then defaults to **no** at its
-confirmation prompt. This default `standard` profile produces advisory
-evidence for possible default-model qualification review (ten tasks, three
-seeds, sixty responses) — see
-[Standard profile](docs/technical-readme.md#standard-profile). Add `--profile
-smoke` for a much faster, smaller-scale run intended for development feedback
-rather than qualification evidence; see
-[Evaluate a generation model](docs/technical-readme.md#evaluate-a-generation-model)
-for smoke's timing thresholds, quality checks, and output artifacts.
-
-SRG, rather than the reviewer model, assigns each result — from the reviewer's
-structured observations plus checks SRG performs itself.
-
-## Evaluate a reviewer model
-
-`srg generate --review` and `bulk-generate` use a second, separately
-configurable model to critique each draft before the generator revises it.
-To compare candidates for that role:
-
-```bash
-srg evaluate-reviewer <candidate-reviewer>
-```
-
-Each decision gives the reviewer one authoritative requirement sentence and
-one fixed, hand-authored mock generated statement. The model chooses one of
-four relationships: supported, missing required information, contradictory, or
-unsupported. SRG knows the expected answer, so scoring is deterministic and no
-model grades the reviewer. Optional constructive feedback is retained for human
-inspection but never affects the summary. The run reveals which model is best
-at the small, specific comparisons needed by a future statement-level review
-pipeline; it does not audit a complete response or run a revision.
-
-This is a small, experimental, smoke-scale command; see
-[Reviewer evaluation](docs/reviewer-evaluation.md).
-
 ## Common next steps
 
 ```bash
@@ -215,13 +178,13 @@ srg chat --help
 
 See [docs/technical-readme.md](docs/technical-readme.md) for:
 
+- Security and privacy details
+- Improving output quality
 - Model sizing and model selection
 - Engagement management
 - Incremental ingestion and rebuild behavior
 - Retrieval and prompt architecture
 - Environment variables
-- Security and privacy details
-- Improving output quality
 - Troubleshooting
 - Development and testing
 
